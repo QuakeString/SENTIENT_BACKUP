@@ -269,20 +269,29 @@ MVP target = end of Phase 1 (a working full backup+restore on Linux); the
 
 ---
 
-## 12. Open decisions (need your input)
+## 12. Resolved decisions (v1)
 
-1. **Ship pg client tools bundled** (recommended, self-contained) vs require
-   installed? Affects installer size and UX.
-2. **Deployment shape on the Pi** — is SENTIENT's postgres reachable on a TCP
-   port, and are `vc-repos`/`reports` on a host path the app can read, or only
-   inside the container volume? (Drives §6.)
-3. **Telemetry**: is *last-N-days* export enough, or do you want *per-tenant* /
-   *per-device* telemetry selection too?
-4. **Restore model**: empty-DB-only (safe, simple) for v1, or must it support
-   merging into a populated DB?
-5. **Encryption default** on or off?
-6. **Scope**: single-DB whole-instance backup for v1 (recommended), or
-   per-tenant backups from the start?
+1. **Bundle the PostgreSQL 18 client tools** (`pg_dump`/`pg_restore` + `libpq`)
+   in the installer — self-contained, no user install required (§8 option 2).
+2. **DB + file-store backup**, but file stores are **conditional on
+   reachability**: the app auto-detects whether it runs on the *same machine*
+   as SENTIENT **and** can read the `vc-repos`/`reports` paths. If yes → the
+   Version-control and Reports categories are **enabled**; if not (e.g. remote,
+   or paths locked inside a Docker volume) → those categories are **greyed out
+   / disabled** with a reason tooltip. DB backup always works over TCP.
+3. **Telemetry = none / all / last-N-days** (COPY stream, §4). Per-tenant /
+   per-device telemetry selection is **deferred to a later release**.
+4. **Restore = empty-DB-only** for v1 (safe, no merge conflicts). Detect a
+   non-empty target and block with guidance. Merge-into-populated is deferred.
+5. **Encryption is a user setting (on/off toggle)**, not forced. When off, show
+   a clear warning that the backup contains secrets. `age` when on (§4/§9).
+6. **Scope = whole-instance** (single `sentient` DB) for v1. **Per-tenant
+   backup & restore is a planned later feature** — keep the category/table
+   model tenant-aware in the core so it can be filtered by `tenant_id` later.
+
+These refine the body above: §5 is empty-DB-only for v1 (merge deferred); §6's
+file-store handling is the auto-enable/disable behavior in (2); §4 telemetry is
+none/all/last-N-days with per-tenant deferred.
 
 ---
 
