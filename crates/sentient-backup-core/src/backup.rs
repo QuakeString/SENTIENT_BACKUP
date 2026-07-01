@@ -1,50 +1,53 @@
-//! Backup engine (Phase 1, DB-only). Streams `pg_dump` (custom format) through
-//! zstd + SHA-256 into a `.sentient-backup` tar containing `manifest.json` and
-//! `db/dump.pgc.zst`. Selective telemetry: `include_telemetry=false` excludes
-//! the `ts_kv` hypertable data (config stays tiny). Full category-level
-//! selection + file stores + encryption arrive in later phases.
+//! Backup engine. Streams `pg_dump` (custom format) through zstd + SHA-256 into
+//! a `.sentient-backup` tar, plus optional file-store members (`vc-repos`,
+//! `reports`). The full schema is always dumped; deselected categories only lose
+//! their DATA. See `docs/RESEARCH_AND_PLAN.md`.
 
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{self, Write};
+use std::io;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-
-use sha2::{Digest, Sha256};
 
 use crate::categories::{catalog, CategoryKind};
 use crate::db::{build_report, ConnConfig, DbInspector};
 use crate::error::{Error, Result};
+use crate::files;
 use crate::manifest::{
-    ComponentEntry, EncryptionInfo, FileEntry, Manifest, SourceInfo, TelemetrySelection,
-    FORMAT_VERSION,
+    ComponentEntry, EncryptionInfo, FileEntry, FileStoreEntry, Manifest, SourceInfo,
+    TelemetrySelection, FORMAT_VERSION,
 };
 use crate::pg_tools::PgTools;
 use crate::progress::{Progress, ProgressFn, Steps};
+use crate::util::HashingWriter;
 
 const DUMP_MEMBER: &str = "db/dump.pgc.zst";
 
-/// Which components' DATA to include. The full schema is always dumped, so a
-/// restore always has every table — only the *data* of deselected categories is
-/// omitted. `configuration` is always included.
+/// A file store to include: its category/store id and the directory to archive.
+#[derive(Debug, Clone)]
+pub struct FileStoreSpec {
+    pub id: String,
+    pub category_id: String,
+    pub path: PathBuf,
+}
+
+/// Which components' DATA to include. Full schema is always dumped, so a restore
+/// always has every table; only deselected data is omitted. `configuration` is
+/// always included.
 #[derive(Debug, Clone)]
 pub struct Selection {
     pub include: HashSet<String>,
-    // Phase 2b: telemetry last-N-days via COPY. `None` here = telemetry follows
-    // `include` (all-or-nothing); `Some(days)` will range-limit it.
+    // Phase 2b: telemetry last-N-days via COPY (reserved).
     pub telemetry_days: Option<u32>,
 }
 
 impl Selection {
-    /// Everything (full backup).
     pub fn full() -> Self {
         Self {
             include: catalog().iter().map(|c| c.id.to_string()).collect(),
             telemetry_days: None,
         }
     }
-
-    /// Everything except the given category ids (`configuration` can't be skipped).
     pub fn skipping(skip: &[String]) -> Self {
         let mut include: HashSet<String> = catalog().iter().map(|c| c.id.to_string()).collect();
         for s in skip {
@@ -56,7 +59,6 @@ impl Selection {
             telemetry_days: None,
         }
     }
-
     pub fn is_included(&self, id: &str) -> bool {
         id == "configuration" || self.include.contains(id)
     }
@@ -66,6 +68,8 @@ impl Selection {
 pub struct BackupOptions {
     pub output: PathBuf,
     pub selection: Selection,
+    /// File stores to include (only reachable ones should be passed).
+    pub file_stores: Vec<FileStoreSpec>,
     pub zstd_level: i32,
 }
 
@@ -74,12 +78,28 @@ impl Default for BackupOptions {
         Self {
             output: PathBuf::from("sentient.sentient-backup"),
             selection: Selection::full(),
+            file_stores: Vec::new(),
             zstd_level: 10,
         }
     }
 }
 
-/// `pg_dump --exclude-table-data` args for every deselected (non-config) category.
+#[derive(Debug, Clone)]
+pub struct BackupSummary {
+    pub output: PathBuf,
+    pub archive_bytes: u64,
+    pub dump_sha256: String,
+    pub file_stores: usize,
+}
+
+/// A member staged in a temp file, to be written into the archive.
+struct StagedMember {
+    archive_path: String,
+    temp: PathBuf,
+    sha256: String,
+    bytes: u64,
+}
+
 fn exclude_data_args(sel: &Selection) -> Vec<String> {
     let mut args = Vec::new();
     for c in catalog() {
@@ -87,7 +107,6 @@ fn exclude_data_args(sel: &Selection) -> Vec<String> {
             continue;
         }
         if c.kind == CategoryKind::TelemetryHistorical {
-            // hypertable: drop the parent's + chunks' data (schema stays)
             args.push("--exclude-table-data=public.ts_kv".into());
             args.push("--exclude-table-data=_timescaledb_internal.*".into());
         } else {
@@ -99,15 +118,9 @@ fn exclude_data_args(sel: &Selection) -> Vec<String> {
     args
 }
 
-#[derive(Debug, Clone)]
-pub struct BackupSummary {
-    pub output: PathBuf,
-    pub archive_bytes: u64,
-    pub dump_sha256: String,
-}
-
 pub async fn run(cfg: &ConnConfig, opts: &BackupOptions, sink: ProgressFn) -> Result<BackupSummary> {
-    let mut steps = Steps::new(sink.clone(), 4);
+    let total_steps = 4 + opts.file_stores.len() as u32;
+    let mut steps = Steps::new(sink.clone(), total_steps);
 
     steps.step("Connecting and inspecting");
     let db = DbInspector::connect(cfg).await?;
@@ -136,6 +149,38 @@ pub async fn run(cfg: &ConnConfig, opts: &BackupOptions, sink: ProgressFn) -> Re
             .await
             .map_err(|e| Error::msg(format!("dump task panicked: {e}")))??;
 
+    let mut members = vec![StagedMember {
+        archive_path: DUMP_MEMBER.into(),
+        temp: tmp_dump,
+        sha256: dump_sha.clone(),
+        bytes: dump_bytes,
+    }];
+    let mut file_store_entries = Vec::new();
+
+    // File stores (only ones passed in — caller filters by selected+reachable).
+    for fs in &opts.file_stores {
+        steps.step(format!("Archiving file store '{}'", fs.id));
+        if !files::reachable(&fs.path) {
+            steps.log(format!("  skipping '{}': {} not readable", fs.id, fs.path.display()));
+            continue;
+        }
+        let member = format!("files/{}.tar.zst", fs.id);
+        let temp = opts.output.with_extension(format!("{}.fs.tmp", fs.id));
+        let (sha, bytes) = files::archive_dir(&fs.path, &temp, opts.zstd_level)?;
+        members.push(StagedMember {
+            archive_path: member.clone(),
+            temp,
+            sha256: sha,
+            bytes,
+        });
+        file_store_entries.push(FileStoreEntry {
+            id: fs.id.clone(),
+            category_id: fs.category_id.clone(),
+            source_path: fs.path.display().to_string(),
+            member,
+        });
+    }
+
     steps.step("Writing manifest and archive");
     let manifest = Manifest {
         format_version: FORMAT_VERSION,
@@ -162,15 +207,21 @@ pub async fn run(cfg: &ConnConfig, opts: &BackupOptions, sink: ProgressFn) -> Re
         } else {
             TelemetrySelection::None
         },
-        files: vec![FileEntry {
-            path: DUMP_MEMBER.into(),
-            bytes: dump_bytes,
-            sha256: dump_sha.clone(),
-        }],
+        files: members
+            .iter()
+            .map(|m| FileEntry {
+                path: m.archive_path.clone(),
+                bytes: m.bytes,
+                sha256: m.sha256.clone(),
+            })
+            .collect(),
+        file_stores: file_store_entries.clone(),
         encryption: EncryptionInfo::none(),
     };
-    write_archive(&opts.output, &manifest, &tmp_dump)?;
-    let _ = std::fs::remove_file(&tmp_dump);
+    write_archive(&opts.output, &manifest, &members)?;
+    for m in &members {
+        let _ = std::fs::remove_file(&m.temp);
+    }
 
     let archive_bytes = std::fs::metadata(&opts.output)?.len();
     steps.done(format!("Backup written: {}", opts.output.display()));
@@ -178,11 +229,12 @@ pub async fn run(cfg: &ConnConfig, opts: &BackupOptions, sink: ProgressFn) -> Re
         output: opts.output.clone(),
         archive_bytes,
         dump_sha256: dump_sha,
+        file_stores: file_store_entries.len(),
     })
 }
 
-/// Run pg_dump (custom format) to stdout → zstd → temp file, hashing the
-/// compressed bytes. Returns (temp path, sha256-hex, byte length).
+/// pg_dump (custom format) → stdout → zstd → temp file, hashing the compressed
+/// bytes. Returns (temp path, sha256-hex, byte length).
 fn dump_compressed(
     tools: &PgTools,
     cfg: &ConnConfig,
@@ -202,8 +254,6 @@ fn dump_compressed(
         "-d".into(),
         cfg.dbname.clone(),
     ];
-    // Full schema is always dumped; only the data of deselected categories is
-    // excluded (so a restore always has every table).
     for a in exclude_data_args(&opts.selection) {
         args.push(a);
     }
@@ -245,7 +295,7 @@ fn dump_compressed(
     Ok((tmp, sha, bytes))
 }
 
-fn write_archive(output: &PathBuf, manifest: &Manifest, dump_tmp: &PathBuf) -> Result<()> {
+fn write_archive(output: &PathBuf, manifest: &Manifest, members: &[StagedMember]) -> Result<()> {
     let f = File::create(output).map_err(|e| Error::msg(format!("creating archive: {e}")))?;
     let mut tar = tar::Builder::new(f);
 
@@ -257,51 +307,12 @@ fn write_archive(output: &PathBuf, manifest: &Manifest, dump_tmp: &PathBuf) -> R
     tar.append_data(&mut header, "manifest.json", &mj[..])
         .map_err(|e| Error::msg(e.to_string()))?;
 
-    let mut df = File::open(dump_tmp).map_err(|e| Error::msg(e.to_string()))?;
-    tar.append_file(DUMP_MEMBER, &mut df)
-        .map_err(|e| Error::msg(e.to_string()))?;
+    for m in members {
+        let mut df = File::open(&m.temp).map_err(|e| Error::msg(e.to_string()))?;
+        tar.append_file(&m.archive_path, &mut df)
+            .map_err(|e| Error::msg(e.to_string()))?;
+    }
 
     tar.finish().map_err(|e| Error::msg(e.to_string()))?;
     Ok(())
-}
-
-/// A writer that tees bytes into a SHA-256 hasher and a byte counter.
-struct HashingWriter<W> {
-    inner: W,
-    hasher: Sha256,
-    count: u64,
-}
-
-impl<W: Write> HashingWriter<W> {
-    fn new(inner: W) -> Self {
-        Self {
-            inner,
-            hasher: Sha256::new(),
-            count: 0,
-        }
-    }
-    fn finish(self) -> (String, u64) {
-        let digest = self.hasher.finalize();
-        (hex(&digest), self.count)
-    }
-}
-
-impl<W: Write> Write for HashingWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let n = self.inner.write(buf)?;
-        self.hasher.update(&buf[..n]);
-        self.count += n as u64;
-        Ok(n)
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
-    }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
 }

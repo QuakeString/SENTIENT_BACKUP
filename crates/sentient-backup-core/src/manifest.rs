@@ -17,7 +17,20 @@ pub struct Manifest {
     pub telemetry: TelemetrySelection,
     /// Archive members + their checksums.
     pub files: Vec<FileEntry>,
+    /// File stores (vc-repos/reports) captured in this backup.
+    #[serde(default)]
+    pub file_stores: Vec<FileStoreEntry>,
     pub encryption: EncryptionInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileStoreEntry {
+    pub id: String,
+    pub category_id: String,
+    /// Where it lived on the source machine.
+    pub source_path: String,
+    /// Archive member holding the tar.zst.
+    pub member: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

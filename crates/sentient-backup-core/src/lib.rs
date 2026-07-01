@@ -14,10 +14,12 @@ pub mod backup;
 pub mod categories;
 pub mod db;
 pub mod error;
+pub mod files;
 pub mod manifest;
 pub mod pg_tools;
 pub mod progress;
 pub mod restore;
+pub mod util;
 
 pub use error::{Error, Result};
 

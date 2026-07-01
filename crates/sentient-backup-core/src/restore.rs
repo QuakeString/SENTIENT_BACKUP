@@ -1,34 +1,37 @@
-//! Restore engine (Phase 1, empty-DB-only). Reads a `.sentient-backup`, verifies
-//! the dump checksum, refuses a non-empty target, then runs the TimescaleDB
-//! restore flow: ensure the extension + `timescaledb_pre_restore()`,
-//! `pg_restore` (decompressed dump piped to stdin), `timescaledb_post_restore()`.
+//! Restore engine (empty-DB-only). Extracts + checksums every archive member,
+//! runs the TimescaleDB-aware DB restore, then extracts any selected file stores
+//! to their target paths.
 
+use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use sha2::{Digest, Sha256};
-
 use crate::db::{ConnConfig, DbInspector};
 use crate::error::{Error, Result};
+use crate::files;
 use crate::manifest::Manifest;
 use crate::pg_tools::PgTools;
 use crate::progress::{Progress, ProgressFn, Steps};
+use crate::util::sha256_file;
 
 const DUMP_MEMBER: &str = "db/dump.pgc.zst";
 
 #[derive(Debug, Clone)]
 pub struct RestoreOptions {
     pub input: PathBuf,
-    /// v1 is empty-DB-only; this override is for advanced users / testing.
+    /// v1 is empty-DB-only; override for advanced use / testing.
     pub allow_nonempty: bool,
+    /// Where to extract each file store, keyed by store id. Missing id → skip.
+    pub file_store_paths: Vec<(String, PathBuf)>,
 }
 
 #[derive(Debug, Clone)]
 pub struct RestoreSummary {
     pub database: String,
     pub restored_from: PathBuf,
+    pub file_stores_restored: usize,
 }
 
 pub async fn run(
@@ -36,10 +39,17 @@ pub async fn run(
     opts: &RestoreOptions,
     sink: ProgressFn,
 ) -> Result<RestoreSummary> {
-    let mut steps = Steps::new(sink.clone(), 6);
+    let base_steps = 6;
+    let restorable_stores: Vec<_> = opts.file_store_paths.iter().cloned().collect();
+    let mut steps = Steps::new(sink.clone(), base_steps);
 
     steps.step("Reading backup");
-    let (manifest, tmp_dump) = read_archive(&opts.input)?;
+    let (manifest, members) = read_archive(&opts.input)?;
+    let cleanup = || {
+        for p in members.values() {
+            let _ = std::fs::remove_file(p);
+        }
+    };
     steps.log(format!(
         "Backup of '{}' ({}), created {}",
         manifest.source.database,
@@ -53,14 +63,17 @@ pub async fn run(
     ));
 
     steps.step("Verifying integrity");
-    verify_checksum(&manifest, &tmp_dump)?;
+    if let Err(e) = verify_all(&manifest, &members) {
+        cleanup();
+        return Err(e);
+    }
 
     steps.step("Checking target database");
     let db = DbInspector::connect(cfg).await?;
     let server = db.server_info().await?;
     let existing = db.list_public_tables().await?;
     if !existing.is_empty() && !opts.allow_nonempty {
-        let _ = std::fs::remove_file(&tmp_dump);
+        cleanup();
         return Err(Error::msg(format!(
             "target database '{}' is not empty ({} tables). v1 restores into an empty database only.",
             server.database,
@@ -75,38 +88,65 @@ pub async fn run(
         db.batch("SELECT timescaledb_pre_restore()").await?;
     }
 
-    steps.step("Restoring (pg_restore)");
+    steps.step("Restoring database (pg_restore)");
+    let dump_tmp = members
+        .get(DUMP_MEMBER)
+        .cloned()
+        .ok_or_else(|| Error::msg("backup has no database dump"))?;
     let tools = PgTools::resolve()?;
     let cfg2 = cfg.clone();
-    let dump2 = tmp_dump.clone();
     let sink2 = sink.clone();
     let restore_res =
-        tokio::task::spawn_blocking(move || pg_restore_stream(&tools, &cfg2, &dump2, sink2))
+        tokio::task::spawn_blocking(move || pg_restore_stream(&tools, &cfg2, &dump_tmp, sink2))
             .await
             .map_err(|e| Error::msg(format!("restore task panicked: {e}")))?;
 
-    // Always attempt post_restore, even if pg_restore erred, to leave the DB sane.
     if has_timescale {
         steps.step("Finalizing (timescaledb_post_restore)");
         db.batch("SELECT timescaledb_post_restore()").await?;
     }
+    if let Err(e) = restore_res {
+        cleanup();
+        return Err(e);
+    }
 
-    let _ = std::fs::remove_file(&tmp_dump);
-    restore_res?;
+    // File stores.
+    let mut restored_stores = 0usize;
+    for entry in &manifest.file_stores {
+        let target = restorable_stores
+            .iter()
+            .find(|(id, _)| id == &entry.id)
+            .map(|(_, p)| p.clone());
+        match target {
+            Some(dest) => {
+                steps.log(format!("Restoring file store '{}' → {}", entry.id, dest.display()));
+                if let Some(member_tmp) = members.get(&entry.member) {
+                    files::extract_dir(member_tmp, &dest)?;
+                    restored_stores += 1;
+                }
+            }
+            None => steps.log(format!(
+                "Skipping file store '{}' (no target path given; was at {})",
+                entry.id, entry.source_path
+            )),
+        }
+    }
 
+    cleanup();
     steps.done(format!("Restored into '{}'", server.database));
     Ok(RestoreSummary {
         database: server.database,
         restored_from: opts.input.clone(),
+        file_stores_restored: restored_stores,
     })
 }
 
-/// Extract `manifest.json` and the compressed dump (to a temp file) from the tar.
-fn read_archive(input: &Path) -> Result<(Manifest, PathBuf)> {
+/// Extract manifest.json + every `db/*` and `files/*` member to temp files.
+fn read_archive(input: &Path) -> Result<(Manifest, HashMap<String, PathBuf>)> {
     let f = File::open(input).map_err(|e| Error::msg(format!("opening backup: {e}")))?;
     let mut ar = tar::Archive::new(f);
     let mut manifest: Option<Manifest> = None;
-    let mut dump_tmp: Option<PathBuf> = None;
+    let mut members: HashMap<String, PathBuf> = HashMap::new();
 
     for entry in ar.entries().map_err(|e| Error::msg(e.to_string()))? {
         let mut e = entry.map_err(|e| Error::msg(e.to_string()))?;
@@ -115,46 +155,34 @@ fn read_archive(input: &Path) -> Result<(Manifest, PathBuf)> {
             let mut buf = String::new();
             e.read_to_string(&mut buf).map_err(|e| Error::msg(e.to_string()))?;
             manifest = Some(serde_json::from_str(&buf).map_err(|e| Error::msg(format!("bad manifest: {e}")))?);
-        } else if path == DUMP_MEMBER {
-            let tmp = input.with_extension("restore.tmp");
+        } else if path.starts_with("db/") || path.starts_with("files/") {
+            let safe = path.replace(['/', '\\'], "_");
+            let tmp = input.with_extension(format!("{safe}.tmp"));
             let mut out = File::create(&tmp).map_err(|e| Error::msg(e.to_string()))?;
             io::copy(&mut e, &mut out).map_err(|e| Error::msg(e.to_string()))?;
-            dump_tmp = Some(tmp);
+            members.insert(path, tmp);
         }
     }
     let manifest = manifest.ok_or_else(|| Error::msg("backup has no manifest.json"))?;
-    let dump = dump_tmp.ok_or_else(|| Error::msg("backup has no database dump"))?;
-    Ok((manifest, dump))
+    Ok((manifest, members))
 }
 
-fn verify_checksum(manifest: &Manifest, dump_zst: &Path) -> Result<()> {
-    let expected = manifest
-        .files
-        .iter()
-        .find(|f| f.path == DUMP_MEMBER)
-        .map(|f| f.sha256.clone())
-        .ok_or_else(|| Error::msg("manifest is missing the dump checksum"))?;
-    let mut f = File::open(dump_zst).map_err(|e| Error::msg(e.to_string()))?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = f.read(&mut buf).map_err(|e| Error::msg(e.to_string()))?;
-        if n == 0 {
-            break;
+fn verify_all(manifest: &Manifest, members: &HashMap<String, PathBuf>) -> Result<()> {
+    for fe in &manifest.files {
+        let tmp = members
+            .get(&fe.path)
+            .ok_or_else(|| Error::msg(format!("archive is missing member '{}'", fe.path)))?;
+        let (got, _) = sha256_file(tmp)?;
+        if got != fe.sha256 {
+            return Err(Error::msg(format!(
+                "integrity check failed for '{}' — the backup is corrupted or altered",
+                fe.path
+            )));
         }
-        hasher.update(&buf[..n]);
-    }
-    let got = hex(&hasher.finalize());
-    if got != expected {
-        return Err(Error::msg(
-            "integrity check failed: the backup's database dump is corrupted or altered",
-        ));
     }
     Ok(())
 }
 
-/// Pipe the decompressed dump into `pg_restore` on stdin (serial; parallel
-/// restore needs a seekable file and lands with bundled tools in a later phase).
 fn pg_restore_stream(
     tools: &PgTools,
     cfg: &ConnConfig,
@@ -186,16 +214,14 @@ fn pg_restore_stream(
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
 
-    // Feed decompressed dump into stdin on its own thread (avoid pipe deadlock).
     let dump_path = dump_zst.to_path_buf();
     let feeder = std::thread::spawn(move || -> io::Result<()> {
         let zf = File::open(&dump_path)?;
         let mut dec = zstd::stream::Decoder::new(zf)?;
         io::copy(&mut dec, &mut stdin)?;
+        use std::io::Write;
         stdin.flush()
     });
-
-    // Drain stdout + stderr as log lines.
     let sink_o = sink.clone();
     let out_t = std::thread::spawn(move || drain(stdout, sink_o));
     let sink_e = sink.clone();
@@ -220,12 +246,4 @@ fn drain<R: Read>(r: R, sink: ProgressFn) {
     for line in io::BufReader::new(r).lines().map_while(std::result::Result::ok) {
         sink(Progress::Log { line });
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
 }

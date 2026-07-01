@@ -8,9 +8,12 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::ipc::Channel;
 
-use sentient_backup_core::backup::{self, BackupOptions, Selection};
+use serde::Deserialize;
+
+use sentient_backup_core::backup::{self, BackupOptions, FileStoreSpec, Selection};
 use sentient_backup_core::categories::catalog;
 use sentient_backup_core::db::{build_report, CategoryReport, ConnConfig, DbInspector, ServerInfo};
+use sentient_backup_core::files::{self, FileStoreStatus};
 use sentient_backup_core::progress::{Progress, ProgressFn};
 use sentient_backup_core::restore::{self, RestoreOptions};
 
@@ -66,11 +69,25 @@ async fn inspect(
     })
 }
 
+#[derive(Deserialize)]
+pub struct FileStoreArg {
+    id: String,
+    category_id: String,
+    path: String,
+}
+
 #[derive(Serialize)]
 pub struct BackupResult {
     output: String,
     archive_bytes: u64,
     dump_sha256: String,
+    file_stores: usize,
+}
+
+/// File-store reachability, for enabling/disabling those categories in the UI.
+#[tauri::command]
+fn file_store_status() -> Vec<FileStoreStatus> {
+    files::statuses()
 }
 
 #[tauri::command]
@@ -82,11 +99,23 @@ async fn backup(
     password: String,
     output: String,
     skip: Vec<String>,
+    file_stores: Vec<FileStoreArg>,
     on_progress: Channel<Progress>,
 ) -> Result<BackupResult, String> {
+    let selection = Selection::skipping(&skip);
+    let specs = file_stores
+        .into_iter()
+        .filter(|f| selection.is_included(&f.category_id))
+        .map(|f| FileStoreSpec {
+            id: f.id,
+            category_id: f.category_id,
+            path: PathBuf::from(f.path),
+        })
+        .collect();
     let opts = BackupOptions {
         output: PathBuf::from(output),
-        selection: Selection::skipping(&skip),
+        selection,
+        file_stores: specs,
         zstd_level: 10,
     };
     let s = backup::run(
@@ -100,6 +129,7 @@ async fn backup(
         output: s.output.display().to_string(),
         archive_bytes: s.archive_bytes,
         dump_sha256: s.dump_sha256,
+        file_stores: s.file_stores,
     })
 }
 
@@ -117,11 +147,16 @@ async fn restore(
     password: String,
     input: String,
     allow_nonempty: bool,
+    file_store_paths: Vec<(String, String)>,
     on_progress: Channel<Progress>,
 ) -> Result<RestoreResult, String> {
     let opts = RestoreOptions {
         input: PathBuf::from(input),
         allow_nonempty,
+        file_store_paths: file_store_paths
+            .into_iter()
+            .map(|(id, p)| (id, PathBuf::from(p)))
+            .collect(),
     };
     let s = restore::run(
         &conn(host, port, dbname, user, password),
@@ -148,7 +183,8 @@ pub fn run() {
             inspect,
             backup,
             restore,
-            default_categories
+            default_categories,
+            file_store_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running SENTIENT Backup & Restore");
