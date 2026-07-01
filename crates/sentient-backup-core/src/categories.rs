@@ -41,6 +41,23 @@ impl TableMatch {
             TableMatch::Prefix(p) => name.starts_with(p),
         }
     }
+
+    /// A `pg_dump` object pattern (`--exclude-table-data`). A `Prefix` becomes a
+    /// `*` glob so declarative-partition children (e.g. `audit_log_2026_07`) are
+    /// covered too.
+    pub fn pg_pattern(&self) -> String {
+        match self {
+            TableMatch::Exact(n) => format!("public.{n}"),
+            TableMatch::Prefix(p) => format!("public.{p}*"),
+        }
+    }
+}
+
+impl Category {
+    /// `pg_dump` patterns covering this category's tables (for excluding data).
+    pub fn pg_patterns(&self) -> Vec<String> {
+        self.tables.iter().map(|m| m.pg_pattern()).collect()
+    }
 }
 
 /// An on-disk store outside the database.

@@ -4,6 +4,7 @@
 //! the `ts_kv` hypertable data (config stays tiny). Full category-level
 //! selection + file stores + encryption arrive in later phases.
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -11,6 +12,7 @@ use std::process::{Command, Stdio};
 
 use sha2::{Digest, Sha256};
 
+use crate::categories::{catalog, CategoryKind};
 use crate::db::{build_report, ConnConfig, DbInspector};
 use crate::error::{Error, Result};
 use crate::manifest::{
@@ -22,12 +24,48 @@ use crate::progress::{Progress, ProgressFn, Steps};
 
 const DUMP_MEMBER: &str = "db/dump.pgc.zst";
 
+/// Which components' DATA to include. The full schema is always dumped, so a
+/// restore always has every table — only the *data* of deselected categories is
+/// omitted. `configuration` is always included.
+#[derive(Debug, Clone)]
+pub struct Selection {
+    pub include: HashSet<String>,
+    // Phase 2b: telemetry last-N-days via COPY. `None` here = telemetry follows
+    // `include` (all-or-nothing); `Some(days)` will range-limit it.
+    pub telemetry_days: Option<u32>,
+}
+
+impl Selection {
+    /// Everything (full backup).
+    pub fn full() -> Self {
+        Self {
+            include: catalog().iter().map(|c| c.id.to_string()).collect(),
+            telemetry_days: None,
+        }
+    }
+
+    /// Everything except the given category ids (`configuration` can't be skipped).
+    pub fn skipping(skip: &[String]) -> Self {
+        let mut include: HashSet<String> = catalog().iter().map(|c| c.id.to_string()).collect();
+        for s in skip {
+            include.remove(s);
+        }
+        include.insert("configuration".into());
+        Self {
+            include,
+            telemetry_days: None,
+        }
+    }
+
+    pub fn is_included(&self, id: &str) -> bool {
+        id == "configuration" || self.include.contains(id)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BackupOptions {
     pub output: PathBuf,
-    /// Phase 1 toggle: include the `ts_kv` telemetry data. Phase 2 replaces this
-    /// with per-category selection + none/all/last-N-days.
-    pub include_telemetry: bool,
+    pub selection: Selection,
     pub zstd_level: i32,
 }
 
@@ -35,10 +73,30 @@ impl Default for BackupOptions {
     fn default() -> Self {
         Self {
             output: PathBuf::from("sentient.sentient-backup"),
-            include_telemetry: true,
+            selection: Selection::full(),
             zstd_level: 10,
         }
     }
+}
+
+/// `pg_dump --exclude-table-data` args for every deselected (non-config) category.
+fn exclude_data_args(sel: &Selection) -> Vec<String> {
+    let mut args = Vec::new();
+    for c in catalog() {
+        if c.kind == CategoryKind::Configuration || sel.is_included(c.id) {
+            continue;
+        }
+        if c.kind == CategoryKind::TelemetryHistorical {
+            // hypertable: drop the parent's + chunks' data (schema stays)
+            args.push("--exclude-table-data=public.ts_kv".into());
+            args.push("--exclude-table-data=_timescaledb_internal.*".into());
+        } else {
+            for pat in c.pg_patterns() {
+                args.push(format!("--exclude-table-data={pat}"));
+            }
+        }
+    }
+    args
 }
 
 #[derive(Debug, Clone)]
@@ -61,10 +119,14 @@ pub async fn run(cfg: &ConnConfig, opts: &BackupOptions, sink: ProgressFn) -> Re
     let tools = PgTools::resolve()?;
     steps.log(tools.dump_version().unwrap_or_else(|_| "pg_dump: unknown version".into()));
 
-    steps.step(if opts.include_telemetry {
-        "Dumping database (full)"
+    let n_skipped = catalog()
+        .iter()
+        .filter(|c| c.kind != CategoryKind::Configuration && !opts.selection.is_included(c.id))
+        .count();
+    steps.step(if n_skipped == 0 {
+        "Dumping database (full)".to_string()
     } else {
-        "Dumping database (excluding telemetry data)"
+        format!("Dumping database ({n_skipped} component(s)' data excluded)")
     });
     let cfg2 = cfg.clone();
     let opts2 = opts.clone();
@@ -89,17 +151,13 @@ pub async fn run(cfg: &ConnConfig, opts: &BackupOptions, sink: ProgressFn) -> Re
             .map(|c| ComponentEntry {
                 id: c.id.clone(),
                 name: c.name.clone(),
-                selected: if c.id == "telemetry_historical" {
-                    opts.include_telemetry
-                } else {
-                    true
-                },
+                selected: opts.selection.is_included(&c.id),
                 tables: c.tables.clone(),
                 bytes: c.bytes,
                 rows: c.rows,
             })
             .collect(),
-        telemetry: if opts.include_telemetry {
+        telemetry: if opts.selection.is_included("telemetry_historical") {
             TelemetrySelection::All
         } else {
             TelemetrySelection::None
@@ -144,11 +202,10 @@ fn dump_compressed(
         "-d".into(),
         cfg.dbname.clone(),
     ];
-    if !opts.include_telemetry {
-        // Skip the telemetry data: the hypertable parent + its chunks. Schema is
-        // still emitted so the target keeps an (empty) ts_kv.
-        args.push("--exclude-table-data=public.ts_kv".into());
-        args.push("--exclude-table-data=_timescaledb_internal.*".into());
+    // Full schema is always dumped; only the data of deselected categories is
+    // excluded (so a restore always has every table).
+    for a in exclude_data_args(&opts.selection) {
+        args.push(a);
     }
 
     let mut child = Command::new(&tools.pg_dump)

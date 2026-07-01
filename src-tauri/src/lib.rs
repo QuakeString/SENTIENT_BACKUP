@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::ipc::Channel;
 
-use sentient_backup_core::backup::{self, BackupOptions};
+use sentient_backup_core::backup::{self, BackupOptions, Selection};
 use sentient_backup_core::categories::catalog;
 use sentient_backup_core::db::{build_report, CategoryReport, ConnConfig, DbInspector, ServerInfo};
 use sentient_backup_core::progress::{Progress, ProgressFn};
@@ -81,12 +81,12 @@ async fn backup(
     user: String,
     password: String,
     output: String,
-    include_telemetry: bool,
+    skip: Vec<String>,
     on_progress: Channel<Progress>,
 ) -> Result<BackupResult, String> {
     let opts = BackupOptions {
         output: PathBuf::from(output),
-        include_telemetry,
+        selection: Selection::skipping(&skip),
         zstd_level: 10,
     };
     let s = backup::run(

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 
-use sentient_backup_core::backup::{self, BackupOptions};
+use sentient_backup_core::backup::{self, BackupOptions, Selection};
 use sentient_backup_core::categories::catalog;
 use sentient_backup_core::db::{build_report, human_bytes, ConnConfig, DbInspector};
 use sentient_backup_core::progress::{Progress, ProgressFn};
@@ -58,7 +58,11 @@ struct BackupArgs {
     /// Output archive path.
     #[arg(short, long, default_value = "sentient.sentient-backup")]
     output: PathBuf,
-    /// Exclude the telemetry (ts_kv) data — much smaller/faster.
+    /// Category ids whose DATA to exclude (comma-separated). See `sbr categories`.
+    /// Schema of every table is always kept; 'configuration' can't be skipped.
+    #[arg(long, value_delimiter = ',')]
+    skip: Vec<String>,
+    /// Convenience alias for `--skip telemetry_historical`.
     #[arg(long)]
     no_telemetry: bool,
     /// zstd compression level (1..=22).
@@ -113,9 +117,13 @@ async fn main() -> Result<()> {
         Cmd::Categories => print_categories(),
         Cmd::Inspect(a) => inspect(&a).await?,
         Cmd::Backup(a) => {
+            let mut skip = a.skip.clone();
+            if a.no_telemetry {
+                skip.push("telemetry_historical".into());
+            }
             let opts = BackupOptions {
                 output: a.output.clone(),
-                include_telemetry: !a.no_telemetry,
+                selection: Selection::skipping(&skip),
                 zstd_level: a.level,
             };
             let s = backup::run(&ConnConfig::from(&a.conn), &opts, cli_sink()).await?;
