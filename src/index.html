@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SENTIENT Backup &amp; Restore</title>
+  <style>
+    :root { --bg:#1b2429; --panel:#243138; --line:#33454e; --fg:#e6edf0; --muted:#93a4ad; --accent:#2f9e8f; --accent2:#3a5b63; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
+    header { padding:14px 18px; background:var(--accent2); font-weight:600; letter-spacing:.3px; }
+    main { padding:18px; max-width:960px; margin:0 auto; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin-bottom:16px; }
+    .panel h2 { margin:0 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:end; }
+    label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+    input { background:#18232a; border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:7px 9px; min-width:120px; }
+    button { background:var(--accent); color:#04211d; border:0; border-radius:6px; padding:9px 16px; font-weight:600; cursor:pointer; }
+    button:disabled { opacity:.5; cursor:default; }
+    .status { color:var(--muted); margin-top:8px; min-height:18px; }
+    table { width:100%; border-collapse:collapse; }
+    th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
+    td.size,td.rows { text-align:right; font-variant-numeric:tabular-nums; }
+    .cat-note { color:var(--muted); font-size:12px; }
+    .total { font-weight:700; }
+    .badge { font-size:11px; color:var(--muted); }
+  </style>
+</head>
+<body>
+  <header>SENTIENT Backup &amp; Restore <span class="badge">— phase 0 skeleton</span></header>
+  <main>
+    <section class="panel">
+      <h2>Connection</h2>
+      <div class="row">
+        <label>Host<input id="host" value="localhost" /></label>
+        <label>Port<input id="port" value="5432" style="min-width:80px" /></label>
+        <label>Database<input id="dbname" value="sentient" /></label>
+        <label>User<input id="user" value="sentient" /></label>
+        <label>Password<input id="password" type="password" /></label>
+        <button id="connect">Inspect</button>
+      </div>
+      <div class="status" id="status"></div>
+    </section>
+
+    <section class="panel" id="backupPanel" style="display:none">
+      <h2>Choose what to back up</h2>
+      <table>
+        <thead>
+          <tr><th style="width:34px"></th><th>Component</th><th>Tables</th><th class="rows">Rows</th><th class="size">Size</th></tr>
+        </thead>
+        <tbody id="cats"></tbody>
+        <tfoot>
+          <tr class="total"><td></td><td>Selected total</td><td id="tTables"></td><td class="rows" id="tRows"></td><td class="size" id="tSize"></td></tr>
+        </tfoot>
+      </table>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,6 +1,11 @@
+# Rust
 /target
 **/target/
+# Tauri generated (schemas etc.)
+src-tauri/gen/
+# Frontend
 node_modules/
 dist/
-.DS_Store
+# Backups / local
 *.sentient-backup
+.DS_Store

@@ -1,0 +1,24 @@
+# Root workspace. Only the UI-agnostic core lives here so `cargo build` stays
+# free of the Tauri/webkit system deps. The Tauri shell (src-tauri/) is its own
+# workspace and depends on this crate by path — built separately / in CI.
+[workspace]
+resolver = "2"
+members = ["crates/sentient-backup-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["The SENTIENT Authors"]
+repository = "https://github.com/QuakeString/SENTIENT_BACKUP"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio-postgres = "0.7"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }

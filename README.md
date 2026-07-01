@@ -16,14 +16,38 @@ to include (Configuration, Telemetry, Attributes, Alarms, Audit logs, RPC,
 Reports, …) and restore selectively and safely.
 
 ## Status
-**Planning.** See [`docs/RESEARCH_AND_PLAN.md`](docs/RESEARCH_AND_PLAN.md) for
-the full research, data-model categorization, backup/restore strategy,
-architecture, cross-platform approach, and the phased implementation plan.
+**Phase 0 (scaffold) — done.** The core engine + CLI work end-to-end against a
+live SENTIENT database (connect, enumerate tables, roll up per-category sizes
+incl. the Timescale telemetry hypertable). The Tauri shell + frontend +
+multi-OS CI are scaffolded. See
+[`docs/RESEARCH_AND_PLAN.md`](docs/RESEARCH_AND_PLAN.md) for the full plan and
+the phase breakdown (Phase 1 = MVP full backup/restore; Phase 2 = the selective
+backup feature).
 
-## Planned layout
+## Getting started (Phase 0)
+
+```bash
+# Build + test the core engine and CLI
+cargo build
+cargo test
+
+# Inspect a live SENTIENT database — prints each backup component's size
+cargo run --bin sbr -- inspect --host localhost --user sentient --password <pw>
+cargo run --bin sbr -- categories          # the static component model
 ```
-crates/sentient-backup-core/   Rust engine (+ CLI)
-src-tauri/                     Tauri v2 shell
-src/                           Svelte/TS frontend
+
+`sbr inspect` shows exactly how much each component contributes — e.g. skipping
+"Telemetry (historical)" is what turns a multi-GB backup into a small one.
+
+The Tauri desktop app lives in `src-tauri/` (its own workspace, depends on the
+core by path). Building it needs the platform WebView deps + the Tauri CLI; CI
+compiles it on Linux + Windows.
+
+## Layout
+```
+crates/sentient-backup-core/   Rust engine + `sbr` CLI  (DbInspector, category model)
+src-tauri/                     Tauri v2 shell (commands over the core)
+src/                           frontend (static HTML/JS for now; Svelte later)
 docs/                          design docs
+.github/workflows/ci.yml       Linux/Windows/macOS build + test
 ```
