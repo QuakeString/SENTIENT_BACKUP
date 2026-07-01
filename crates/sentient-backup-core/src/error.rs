@@ -5,6 +5,9 @@ pub enum Error {
     #[error("database error: {0}")]
     Db(#[from] tokio_postgres::Error),
 
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
     #[error("connection failed: {0}")]
     Connect(String),
 

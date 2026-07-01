@@ -88,6 +88,12 @@ impl DbInspector {
         Ok(Self { client })
     }
 
+    /// Run one or more statements, ignoring results (for pre/post-restore SQL).
+    pub async fn batch(&self, sql: &str) -> Result<()> {
+        self.client.batch_execute(sql).await?;
+        Ok(())
+    }
+
     pub async fn server_info(&self) -> Result<ServerInfo> {
         let row = self
             .client

@@ -10,9 +10,14 @@
 //! Later phases add the backup/restore engines (pg_dump/pg_restore + COPY,
 //! manifest, compression, encryption, file stores) — see `docs/RESEARCH_AND_PLAN.md`.
 
+pub mod backup;
 pub mod categories;
 pub mod db;
 pub mod error;
+pub mod manifest;
+pub mod pg_tools;
+pub mod progress;
+pub mod restore;
 
 pub use error::{Error, Result};
 
