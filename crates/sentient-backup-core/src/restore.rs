@@ -39,12 +39,11 @@ pub async fn run(
     opts: &RestoreOptions,
     sink: ProgressFn,
 ) -> Result<RestoreSummary> {
-    let base_steps = 6;
     let restorable_stores: Vec<_> = opts.file_store_paths.iter().cloned().collect();
-    let mut steps = Steps::new(sink.clone(), base_steps);
-
-    steps.step("Reading backup");
     let (manifest, members) = read_archive(&opts.input)?;
+    let has_telemetry = members.contains_key(crate::backup::TELEMETRY_MEMBER);
+    let mut steps = Steps::new(sink.clone(), 6 + u32::from(has_telemetry));
+    steps.step("Reading backup");
     let cleanup = || {
         for p in members.values() {
             let _ = std::fs::remove_file(p);
@@ -108,6 +107,17 @@ pub async fn run(
     if let Err(e) = restore_res {
         cleanup();
         return Err(e);
+    }
+
+    // Telemetry (after post_restore: ts_kv is a live hypertable again).
+    if has_telemetry {
+        steps.step("Restoring telemetry (COPY)");
+        if let Some(tmp) = members.get(crate::backup::TELEMETRY_MEMBER) {
+            let rows = db
+                .copy_in_compressed("COPY ts_kv FROM STDIN WITH (FORMAT binary)", tmp)
+                .await?;
+            steps.log(format!("  {rows} telemetry rows"));
+        }
     }
 
     // File stores.

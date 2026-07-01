@@ -66,6 +66,9 @@ struct BackupArgs {
     /// Convenience alias for `--skip telemetry_historical`.
     #[arg(long)]
     no_telemetry: bool,
+    /// Keep only the last N days of telemetry (default: all, unless skipped).
+    #[arg(long)]
+    telemetry_days: Option<u32>,
     /// Include the reports file store from this directory (if 'reports' isn't skipped).
     #[arg(long)]
     reports_path: Option<PathBuf>,
@@ -134,7 +137,8 @@ async fn main() -> Result<()> {
             if a.no_telemetry {
                 skip.push("telemetry_historical".into());
             }
-            let selection = Selection::skipping(&skip);
+            let mut selection = Selection::skipping(&skip);
+            selection.telemetry_days = a.telemetry_days;
             let mut file_stores = Vec::new();
             if let Some(p) = &a.reports_path {
                 if selection.is_included("reports") {

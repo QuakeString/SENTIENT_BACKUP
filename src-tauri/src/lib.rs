@@ -99,10 +99,12 @@ async fn backup(
     password: String,
     output: String,
     skip: Vec<String>,
+    telemetry_days: Option<u32>,
     file_stores: Vec<FileStoreArg>,
     on_progress: Channel<Progress>,
 ) -> Result<BackupResult, String> {
-    let selection = Selection::skipping(&skip);
+    let mut selection = Selection::skipping(&skip);
+    selection.telemetry_days = telemetry_days;
     let specs = file_stores
         .into_iter()
         .filter(|f| selection.is_included(&f.category_id))

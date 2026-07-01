@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use crate::categories::{catalog, CategoryKind};
-use crate::db::{build_report, ConnConfig, DbInspector};
+use crate::db::{build_report, human_bytes, ConnConfig, DbInspector};
 use crate::error::{Error, Result};
 use crate::files;
 use crate::manifest::{
@@ -22,6 +22,15 @@ use crate::progress::{Progress, ProgressFn, Steps};
 use crate::util::HashingWriter;
 
 const DUMP_MEMBER: &str = "db/dump.pgc.zst";
+pub const TELEMETRY_MEMBER: &str = "db/telemetry.copy.zst";
+
+/// How telemetry (`ts_kv`) is captured. Always via COPY (never the pg_dump).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelemetryMode {
+    None,
+    All,
+    LastDays(u32),
+}
 
 /// A file store to include: its category/store id and the directory to archive.
 #[derive(Debug, Clone)]
@@ -62,6 +71,16 @@ impl Selection {
     pub fn is_included(&self, id: &str) -> bool {
         id == "configuration" || self.include.contains(id)
     }
+
+    pub fn telemetry_mode(&self) -> TelemetryMode {
+        if !self.include.contains("telemetry_historical") {
+            TelemetryMode::None
+        } else if let Some(d) = self.telemetry_days {
+            TelemetryMode::LastDays(d)
+        } else {
+            TelemetryMode::All
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -101,33 +120,36 @@ struct StagedMember {
 }
 
 fn exclude_data_args(sel: &Selection) -> Vec<String> {
-    let mut args = Vec::new();
+    // Telemetry is ALWAYS handled via COPY, never included in the pg_dump.
+    let mut args = vec![
+        "--exclude-table-data=public.ts_kv".into(),
+        "--exclude-table-data=_timescaledb_internal.*".into(),
+    ];
     for c in catalog() {
-        if c.kind == CategoryKind::Configuration || sel.is_included(c.id) {
+        if c.kind == CategoryKind::Configuration
+            || c.kind == CategoryKind::TelemetryHistorical
+            || sel.is_included(c.id)
+        {
             continue;
         }
-        if c.kind == CategoryKind::TelemetryHistorical {
-            args.push("--exclude-table-data=public.ts_kv".into());
-            args.push("--exclude-table-data=_timescaledb_internal.*".into());
-        } else {
-            for pat in c.pg_patterns() {
-                args.push(format!("--exclude-table-data={pat}"));
-            }
+        for pat in c.pg_patterns() {
+            args.push(format!("--exclude-table-data={pat}"));
         }
     }
     args
 }
 
 pub async fn run(cfg: &ConnConfig, opts: &BackupOptions, sink: ProgressFn) -> Result<BackupSummary> {
-    let total_steps = 4 + opts.file_stores.len() as u32;
+    let tmode = opts.selection.telemetry_mode();
+    let telem_extra = if tmode == TelemetryMode::None { 0 } else { 1 };
+    let total_steps = 3 + telem_extra + opts.file_stores.len() as u32;
     let mut steps = Steps::new(sink.clone(), total_steps);
 
     steps.step("Connecting and inspecting");
-    let db = DbInspector::connect(cfg).await?;
+    let db = DbInspector::connect(cfg).await?; // kept alive for the telemetry COPY
     let server = db.server_info().await?;
     let tables = db.tables_with_true_sizes().await?;
     let report = build_report(&tables);
-    drop(db);
 
     let tools = PgTools::resolve()?;
     steps.log(tools.dump_version().unwrap_or_else(|_| "pg_dump: unknown version".into()));
@@ -156,6 +178,39 @@ pub async fn run(cfg: &ConnConfig, opts: &BackupOptions, sink: ProgressFn) -> Re
         bytes: dump_bytes,
     }];
     let mut file_store_entries = Vec::new();
+
+    // Telemetry via COPY (pg_dump excluded ts_kv data; schema is present).
+    if tmode != TelemetryMode::None {
+        steps.step(match tmode {
+            TelemetryMode::All => "Exporting telemetry (all)".to_string(),
+            TelemetryMode::LastDays(d) => format!("Exporting telemetry (last {d} days)"),
+            TelemetryMode::None => unreachable!(),
+        });
+        let sql = match tmode {
+            TelemetryMode::All => {
+                "COPY (SELECT * FROM ts_kv) TO STDOUT WITH (FORMAT binary)".to_string()
+            }
+            TelemetryMode::LastDays(d) => format!(
+                "COPY (SELECT * FROM ts_kv WHERE ts >= \
+                 (extract(epoch from now())*1000 - {d}::bigint*86400000)::bigint) \
+                 TO STDOUT WITH (FORMAT binary)"
+            ),
+            TelemetryMode::None => unreachable!(),
+        };
+        let temp = opts.output.with_extension("telemetry.tmp");
+        let (sha, bytes, raw) = db.copy_out_compressed(&sql, &temp, opts.zstd_level).await?;
+        steps.log(format!(
+            "  telemetry: {} raw → {} compressed",
+            human_bytes(raw as i64),
+            human_bytes(bytes as i64)
+        ));
+        members.push(StagedMember {
+            archive_path: TELEMETRY_MEMBER.into(),
+            temp,
+            sha256: sha,
+            bytes,
+        });
+    }
 
     // File stores (only ones passed in — caller filters by selected+reachable).
     for fs in &opts.file_stores {
@@ -202,10 +257,10 @@ pub async fn run(cfg: &ConnConfig, opts: &BackupOptions, sink: ProgressFn) -> Re
                 rows: c.rows,
             })
             .collect(),
-        telemetry: if opts.selection.is_included("telemetry_historical") {
-            TelemetrySelection::All
-        } else {
-            TelemetrySelection::None
+        telemetry: match tmode {
+            TelemetryMode::None => TelemetrySelection::None,
+            TelemetryMode::All => TelemetrySelection::All,
+            TelemetryMode::LastDays(d) => TelemetrySelection::Range { days: d },
         },
         files: members
             .iter()

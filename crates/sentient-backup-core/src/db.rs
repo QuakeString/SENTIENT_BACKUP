@@ -3,12 +3,16 @@
 //! "how big is each backup component".
 
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::Path;
 
 use serde::Serialize;
 use tokio_postgres::{Client, NoTls};
 
 use crate::categories::{self, catalog, CategoryKind};
 use crate::error::{Error, Result};
+use crate::util::HashingWriter;
 
 /// Connection parameters. (TLS is a later phase; local/dev is NoTls for now.)
 #[derive(Debug, Clone, Serialize)]
@@ -92,6 +96,53 @@ impl DbInspector {
     pub async fn batch(&self, sql: &str) -> Result<()> {
         self.client.batch_execute(sql).await?;
         Ok(())
+    }
+
+    /// Stream a `COPY (...) TO STDOUT (FORMAT binary)` into a zstd file, hashing
+    /// the compressed output. Returns (sha256, compressed_bytes, raw_bytes).
+    pub async fn copy_out_compressed(
+        &self,
+        sql: &str,
+        dest: &Path,
+        level: i32,
+    ) -> Result<(String, u64, u64)> {
+        use futures_util::StreamExt;
+        let stream = self.client.copy_out(sql).await?;
+        futures_util::pin_mut!(stream);
+        let file = File::create(dest)?;
+        let mut hw = HashingWriter::new(file);
+        let mut enc =
+            zstd::stream::Encoder::new(&mut hw, level).map_err(|e| Error::msg(format!("zstd: {e}")))?;
+        let mut raw = 0u64;
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk?;
+            raw += bytes.len() as u64;
+            enc.write_all(&bytes)?;
+        }
+        enc.finish().map_err(|e| Error::msg(format!("zstd finish: {e}")))?;
+        let (sha, comp) = hw.finish();
+        Ok((sha, comp, raw))
+    }
+
+    /// Feed a zstd-compressed COPY payload into `COPY <table> FROM STDIN (FORMAT
+    /// binary)`. Returns rows inserted.
+    pub async fn copy_in_compressed(&self, sql: &str, src: &Path) -> Result<u64> {
+        use futures_util::SinkExt;
+        let sink = self.client.copy_in::<_, bytes::Bytes>(sql).await?;
+        futures_util::pin_mut!(sink);
+        let f = File::open(src)?;
+        let mut dec =
+            zstd::stream::Decoder::new(f).map_err(|e| Error::msg(format!("zstd: {e}")))?;
+        let mut buf = vec![0u8; 128 * 1024];
+        loop {
+            let n = dec.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            sink.send(bytes::Bytes::copy_from_slice(&buf[..n])).await?;
+        }
+        let rows = sink.finish().await?;
+        Ok(rows)
     }
 
     pub async fn server_info(&self) -> Result<ServerInfo> {
