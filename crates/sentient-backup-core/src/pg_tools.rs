@@ -60,14 +60,15 @@ fn tool_version(bin: &Path) -> Result<String> {
 }
 
 fn parse_major(version_line: &str) -> Option<u32> {
-    // last whitespace-separated token, first dot-separated number
-    version_line
-        .split_whitespace()
-        .last()?
-        .split('.')
-        .next()?
-        .parse()
-        .ok()
+    // first whitespace-separated token that begins with a digit (the version),
+    // then its leading digits (major). Ignores trailing "(Ubuntu)" etc.
+    for tok in version_line.split_whitespace() {
+        if tok.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            let major: String = tok.chars().take_while(|c| c.is_ascii_digit()).collect();
+            return major.parse().ok();
+        }
+    }
+    None
 }
 
 #[cfg(test)]
