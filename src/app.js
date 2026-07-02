@@ -26,6 +26,13 @@ function recalcTotal() {
   $("tTables").textContent = tables;
 }
 
+function syncTeleOpts() {
+  // Telemetry range controls are only relevant when the historical-telemetry
+  // component is selected.
+  const cb = document.querySelector('input.cat[data-cid="telemetry_historical"]');
+  $("teleOpts").style.display = cb && cb.checked ? "" : "none";
+}
+
 function renderCategories() {
   const tbody = $("cats");
   tbody.innerHTML = "";
@@ -34,7 +41,7 @@ function renderCategories() {
     const checked = c.default_selected ? "checked" : "";
     const disabled = c.locked ? "disabled" : "";
     tr.innerHTML = `
-      <td><input class="cat" type="checkbox" data-i="${i}" ${checked} ${disabled} /></td>
+      <td><input class="cat" type="checkbox" data-i="${i}" data-cid="${c.id}" ${checked} ${disabled} /></td>
       <td>${c.name}${c.locked ? " <span class='badge'>required</span>" : ""}
           <div class="cat-note">${c.notes}</div></td>
       <td>${c.tables.length}</td>
@@ -43,9 +50,81 @@ function renderCategories() {
     tbody.appendChild(tr);
   });
   tbody.querySelectorAll("input.cat").forEach((cb) =>
-    cb.addEventListener("change", recalcTotal)
+    cb.addEventListener("change", () => { recalcTotal(); syncTeleOpts(); })
   );
   recalcTotal();
+  syncTeleOpts();
+}
+
+// Ids of unchecked, skippable components (locked ones are disabled+checked).
+function skipList() {
+  const skip = [];
+  document.querySelectorAll("input.cat[type=checkbox]").forEach((cb) => {
+    if (!cb.checked && !cb.disabled) skip.push(cb.dataset.cid);
+  });
+  return skip;
+}
+
+function conn() {
+  return {
+    host: $("host").value,
+    port: Number($("port").value),
+    dbname: $("dbname").value,
+    user: $("user").value,
+    password: $("password").value,
+  };
+}
+
+function onProgress(p) {
+  if (p.type === "step") {
+    $("progressStep").textContent = `[${p.index}/${p.total}] ${p.name}`;
+  } else if (p.type === "log") {
+    const el = $("progressLog");
+    el.textContent += p.line + "\n";
+    el.scrollTop = el.scrollHeight;
+  } else if (p.type === "done") {
+    $("progressStep").textContent = "✓ " + p.message;
+  }
+}
+
+async function backup() {
+  const skip = skipList();
+  const teleIncluded = !skip.includes("telemetry_historical");
+  const mode = document.querySelector('input[name="teleMode"]:checked')?.value;
+  const telemetryDays =
+    teleIncluded && mode === "days" ? Number($("teleDays").value) : null;
+
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "");
+  const defaultName = `${$("dbname").value}-${stamp}.sentient-backup`;
+  const output = await invoke("pick_save_path", { defaultName });
+  if (!output) return; // cancelled
+
+  $("backupBtn").disabled = true;
+  $("backupStatus").textContent = "";
+  $("progressLog").textContent = "";
+  $("progressStep").textContent = "Starting…";
+  $("progressPanel").style.display = "";
+
+  const channel = new window.__TAURI__.core.Channel();
+  channel.onmessage = onProgress;
+
+  try {
+    const res = await invoke("backup", {
+      ...conn(),
+      output,
+      skip,
+      telemetryDays,
+      fileStores: [],
+      onProgress: channel,
+    });
+    $("backupStatus").textContent =
+      `Backup complete — ${humanBytes(res.archive_bytes)} → ${res.output}`;
+  } catch (e) {
+    $("progressStep").textContent = "";
+    $("backupStatus").textContent = "Backup failed: " + e;
+  } finally {
+    $("backupBtn").disabled = false;
+  }
 }
 
 async function connect() {
@@ -76,3 +155,4 @@ async function connect() {
 }
 
 $("connect").addEventListener("click", connect);
+$("backupBtn").addEventListener("click", backup);

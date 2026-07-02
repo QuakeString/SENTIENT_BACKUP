@@ -178,15 +178,45 @@ fn default_categories() -> serde_json::Value {
     serde_json::to_value(catalog()).unwrap_or(serde_json::Value::Null)
 }
 
+/// Native "Save As" dialog for choosing where to write the backup archive.
+/// Returns the chosen path, or `None` if the user cancelled. Sync command so
+/// the blocking dialog runs off the async runtime / main thread.
+#[tauri::command]
+fn pick_save_path(app: tauri::AppHandle, default_name: String) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .add_filter("SENTIENT backup", &["sentient-backup"])
+        .set_file_name(default_name)
+        .blocking_save_file()
+        .and_then(|fp| fp.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Native "Open" dialog for choosing a backup archive to restore.
+#[tauri::command]
+fn pick_open_path(app: tauri::AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .add_filter("SENTIENT backup", &["sentient-backup"])
+        .blocking_pick_file()
+        .and_then(|fp| fp.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             inspect,
             backup,
             restore,
             default_categories,
-            file_store_status
+            file_store_status,
+            pick_save_path,
+            pick_open_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running SENTIENT Backup & Restore");
