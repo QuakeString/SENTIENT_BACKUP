@@ -51,8 +51,24 @@ fn resolve_one(name: &str, env: &str) -> Result<PathBuf> {
     })
 }
 
+/// Build a `Command` for a pg tool that never flashes a console window on
+/// Windows. `pg_dump`/`pg_restore` are console programs; spawned from the GUI
+/// they'd otherwise pop up an empty terminal. No-op on other platforms.
+pub fn command(bin: &Path) -> Command {
+    let cmd = Command::new(bin);
+    #[cfg(windows)]
+    let cmd = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut c = cmd;
+        c.creation_flags(CREATE_NO_WINDOW);
+        c
+    };
+    cmd
+}
+
 fn tool_version(bin: &Path) -> Result<String> {
-    let out = Command::new(bin)
+    let out = command(bin)
         .arg("--version")
         .output()
         .map_err(|e| Error::msg(format!("running {}: {e}", bin.display())))?;

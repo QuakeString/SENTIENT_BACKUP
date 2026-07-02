@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use crate::db::{ConnConfig, DbInspector};
 use crate::error::{Error, Result};
@@ -200,7 +200,7 @@ fn pg_restore_stream(
     sink: ProgressFn,
 ) -> Result<()> {
     let port = cfg.port.to_string();
-    let mut child = Command::new(&tools.pg_restore)
+    let mut child = crate::pg_tools::command(&tools.pg_restore)
         .args([
             "--no-password",
             "--exit-on-error",

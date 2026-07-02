@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use crate::categories::{catalog, CategoryKind};
 use crate::db::{build_report, human_bytes, ConnConfig, DbInspector};
@@ -313,9 +313,10 @@ fn dump_compressed(
         args.push(a);
     }
 
-    let mut child = Command::new(&tools.pg_dump)
+    let mut child = crate::pg_tools::command(&tools.pg_dump)
         .args(&args)
         .env("PGPASSWORD", &cfg.password)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
