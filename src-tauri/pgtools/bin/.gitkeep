@@ -1,0 +1,3 @@
+# Placeholder so the Tauri resource glob (pgtools/bin/*) always matches.
+# Real pg_dump/pg_restore + libs are staged here at build time by
+# scripts/fetch_pgtools.py (Windows). Not committed; see .gitignore.

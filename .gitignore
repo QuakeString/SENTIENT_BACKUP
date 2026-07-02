@@ -9,3 +9,7 @@ dist/
 # Backups / local
 *.sentient-backup
 .DS_Store
+
+# Bundled PostgreSQL client tools are fetched at build time, not committed.
+/src-tauri/pgtools/bin/*
+!/src-tauri/pgtools/bin/.gitkeep

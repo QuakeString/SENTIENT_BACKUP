@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::ipc::Channel;
+use tauri::Manager;
 
 use serde::Deserialize;
 
@@ -209,6 +210,26 @@ fn pick_open_path(app: tauri::AppHandle) -> Option<String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            // If we bundled pg client tools as resources, point the engine at
+            // them (PgTools::resolve checks SBR_PG_DUMP/SBR_PG_RESTORE first) so
+            // the app is self-contained and doesn't need a system PostgreSQL.
+            if let Ok(res) = app.path().resource_dir() {
+                let bin = res.join("pgtools").join("bin");
+                let (dump, restore) = if cfg!(windows) {
+                    (bin.join("pg_dump.exe"), bin.join("pg_restore.exe"))
+                } else {
+                    (bin.join("pg_dump"), bin.join("pg_restore"))
+                };
+                if dump.exists() {
+                    std::env::set_var("SBR_PG_DUMP", &dump);
+                }
+                if restore.exists() {
+                    std::env::set_var("SBR_PG_RESTORE", &restore);
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             inspect,
             backup,
