@@ -51,6 +51,24 @@ fn resolve_one(name: &str, env: &str) -> Result<PathBuf> {
     })
 }
 
+/// A libpq conninfo string (for pg_dump/pg_restore `-d`) with TCP keepalives
+/// enabled, so a long remote operation over wifi/NAT doesn't lose its idle
+/// connection during server-side work (e.g. index ATTACH). The password is left
+/// to the PGPASSWORD env var — deliberately not embedded, to keep it out of the
+/// process's argument list.
+pub fn conninfo(cfg: &crate::db::ConnConfig) -> String {
+    fn q(v: &str) -> String {
+        format!("'{}'", v.replace('\\', "\\\\").replace('\'', "\\'"))
+    }
+    format!(
+        "host={} port={} user={} dbname={} keepalives=1 keepalives_idle=15 keepalives_interval=5 keepalives_count=6",
+        q(&cfg.host),
+        cfg.port,
+        q(&cfg.user),
+        q(&cfg.dbname),
+    )
+}
+
 /// Build a `Command` for a pg tool that never flashes a console window on
 /// Windows. `pg_dump`/`pg_restore` are console programs; spawned from the GUI
 /// they'd otherwise pop up an empty terminal. No-op on other platforms.

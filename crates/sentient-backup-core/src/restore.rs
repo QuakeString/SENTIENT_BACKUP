@@ -227,21 +227,12 @@ fn pg_restore_stream(
     dump_zst: &Path,
     sink: ProgressFn,
 ) -> Result<()> {
-    let port = cfg.port.to_string();
+    // Pass a full conninfo (with TCP keepalives) via -d so long server-side
+    // steps like index ATTACH don't get their idle connection dropped by a
+    // NAT/firewall on a remote/wifi link. Password stays in PGPASSWORD.
+    let conninfo = crate::pg_tools::conninfo(cfg);
     let mut child = crate::pg_tools::command(&tools.pg_restore)
-        .args([
-            "--no-password",
-            "--verbose",
-            "--exit-on-error",
-            "-h",
-            &cfg.host,
-            "-p",
-            &port,
-            "-U",
-            &cfg.user,
-            "-d",
-            &cfg.dbname,
-        ])
+        .args(["--no-password", "--verbose", "--exit-on-error", "-d", &conninfo])
         .env("PGPASSWORD", &cfg.password)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

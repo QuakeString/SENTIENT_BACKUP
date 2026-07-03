@@ -303,19 +303,12 @@ fn dump_compressed(
     opts: &BackupOptions,
     sink: ProgressFn,
 ) -> Result<(PathBuf, String, u64)> {
-    let port = cfg.port.to_string();
     let mut args: Vec<String> = vec![
         "--format=custom".into(),
         "--verbose".into(),
         "--no-password".into(),
-        "-h".into(),
-        cfg.host.clone(),
-        "-p".into(),
-        port,
-        "-U".into(),
-        cfg.user.clone(),
         "-d".into(),
-        cfg.dbname.clone(),
+        crate::pg_tools::conninfo(cfg),
     ];
     for a in exclude_data_args(&opts.selection) {
         args.push(a);
