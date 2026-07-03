@@ -106,30 +106,45 @@ pub fn list_connections(app: AppHandle) -> Result<Vec<ConnProfile>, String> {
     rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
 }
 
+#[derive(Serialize)]
+pub struct SaveResult {
+    id: i64,
+    /// Whether the password made it into the OS keychain. False when a password
+    /// was given but the platform has no keychain available (e.g. a Linux box
+    /// with no running Secret Service) — the profile is still saved.
+    password_saved: bool,
+}
+
 #[tauri::command]
-pub fn save_connection(app: AppHandle, profile: ConnProfile) -> Result<i64, String> {
+pub fn save_connection(app: AppHandle, profile: ConnProfile) -> Result<SaveResult, String> {
     let c = open(&app)?;
-    let has_pw = profile.password.as_deref().map(|p| !p.is_empty()).unwrap_or(false);
     let id = match profile.id {
         Some(id) => {
             c.execute(
-                "UPDATE connections SET name=?1,host=?2,port=?3,dbname=?4,username=?5,has_password=?6 WHERE id=?7",
-                params![profile.name, profile.host, profile.port as i64, profile.dbname, profile.username, has_pw as i64, id],
+                "UPDATE connections SET name=?1,host=?2,port=?3,dbname=?4,username=?5 WHERE id=?6",
+                params![profile.name, profile.host, profile.port as i64, profile.dbname, profile.username, id],
             ).map_err(|e| e.to_string())?;
             id
         }
         None => {
             c.execute(
-                "INSERT INTO connections (name,host,port,dbname,username,has_password,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-                params![profile.name, profile.host, profile.port as i64, profile.dbname, profile.username, has_pw as i64, now()],
+                "INSERT INTO connections (name,host,port,dbname,username,has_password,created_at) VALUES (?1,?2,?3,?4,?5,0,?6)",
+                params![profile.name, profile.host, profile.port as i64, profile.dbname, profile.username, now()],
             ).map_err(|e| e.to_string())?;
             c.last_insert_rowid()
         }
     };
+    // Try the OS keychain; degrade gracefully if unavailable so the profile
+    // still saves. has_password reflects whether the password is really stored.
+    let mut password_saved = false;
     if let Some(pw) = profile.password.filter(|p| !p.is_empty()) {
-        keyring_set(id, &pw)?;
+        password_saved = keyring_set(id, &pw).is_ok();
     }
-    Ok(id)
+    c.execute(
+        "UPDATE connections SET has_password=?1 WHERE id=?2",
+        params![password_saved as i64, id],
+    ).map_err(|e| e.to_string())?;
+    Ok(SaveResult { id, password_saved })
 }
 
 #[tauri::command]

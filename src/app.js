@@ -257,7 +257,7 @@ async function saveProfile() {
   const name = `${c.user}@${c.host}:${c.port}/${c.dbname}`;
   const existing = profilesList.find((p) => p.name === name);
   try {
-    const id = await invoke("save_connection", {
+    const res = await invoke("save_connection", {
       profile: {
         id: existing ? existing.id : null,
         name, host: c.host, port: c.port, dbname: c.dbname,
@@ -265,8 +265,13 @@ async function saveProfile() {
       },
     });
     await loadProfiles();
-    $("profiles").value = String(id);
-    setStatus(`Saved '${name}'` + (c.password ? " (password in OS keychain)." : "."));
+    $("profiles").value = String(res.id);
+    if (c.password && !res.password_saved) {
+      setStatus(`Saved '${name}' — but the password could not be stored: no system keychain is available. ` +
+        `On Linux, run a Secret Service (install gnome-keyring, or enable KWallet's Secret Service).`, true);
+    } else {
+      setStatus(`Saved '${name}'` + (res.password_saved ? " (password in the OS keychain)." : "."));
+    }
   } catch (e) { setStatus("Save failed: " + e, true); }
 }
 
