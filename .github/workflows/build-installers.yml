@@ -48,3 +48,13 @@ jobs:
             src-tauri/target/release/bundle/**/*.dmg
             src-tauri/target/release/bundle/**/*.AppImage
             src-tauri/target/release/bundle/**/*.deb
+      # Raw dynamically-linked ELF binary — links the SYSTEM webkit/gtk at run
+      # time, so it works on rolling distros (Arch) where the AppImage's bundled
+      # Ubuntu libs clash. Needs webkit2gtk-4.1 + pg_dump installed on the host.
+      - name: Upload Linux native binary
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binary
+          if-no-files-found: warn
+          path: src-tauri/target/release/SENTIENT_Backup_*_Restore
