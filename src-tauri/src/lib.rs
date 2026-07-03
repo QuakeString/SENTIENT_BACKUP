@@ -308,21 +308,32 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // If we bundled pg client tools as resources, point the engine at
-            // them (PgTools::resolve checks SBR_PG_DUMP/SBR_PG_RESTORE first) so
-            // the app is self-contained and doesn't need a system PostgreSQL.
+            // Point the engine at bundled pg client tools if present, so the app
+            // is self-contained (no system PostgreSQL / version mismatch). Look
+            // in the Tauri resource dir (installed apps) AND next to the
+            // executable (portable/raw binary). PgTools::resolve honours
+            // SBR_PG_DUMP / SBR_PG_RESTORE first.
+            let (dump_name, restore_name) = if cfg!(windows) {
+                ("pg_dump.exe", "pg_restore.exe")
+            } else {
+                ("pg_dump", "pg_restore")
+            };
+            let mut dirs: Vec<PathBuf> = Vec::new();
             if let Ok(res) = app.path().resource_dir() {
-                let bin = res.join("pgtools").join("bin");
-                let (dump, restore) = if cfg!(windows) {
-                    (bin.join("pg_dump.exe"), bin.join("pg_restore.exe"))
-                } else {
-                    (bin.join("pg_dump"), bin.join("pg_restore"))
-                };
-                if dump.exists() {
-                    std::env::set_var("SBR_PG_DUMP", &dump);
+                dirs.push(res.join("pgtools").join("bin"));
+            }
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(d) = exe.parent() {
+                    dirs.push(d.join("pgtools").join("bin"));
                 }
-                if restore.exists() {
+            }
+            for bin in dirs {
+                let dump = bin.join(dump_name);
+                let restore = bin.join(restore_name);
+                if dump.exists() && restore.exists() {
+                    std::env::set_var("SBR_PG_DUMP", &dump);
                     std::env::set_var("SBR_PG_RESTORE", &restore);
+                    break;
                 }
             }
             Ok(())
