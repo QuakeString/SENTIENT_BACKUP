@@ -275,6 +275,15 @@ fn pick_open_path(app: tauri::AppHandle) -> Option<String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // WebKitGTK's DMABUF renderer crashes the web process ("WebKitWebProcess ...
+    // fatal error") on some Linux setups (KDE / Nvidia / certain Wayland combos).
+    // Disable it before the webview starts; WebKit falls back to a compatible
+    // renderer. Set only if the user hasn't overridden it. No effect off Linux.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
