@@ -275,13 +275,20 @@ fn pick_open_path(app: tauri::AppHandle) -> Option<String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // WebKitGTK's DMABUF renderer crashes the web process ("WebKitWebProcess ...
-    // fatal error") on some Linux setups (KDE / Nvidia / certain Wayland combos).
-    // Disable it before the webview starts; WebKit falls back to a compatible
-    // renderer. Set only if the user hasn't overridden it. No effect off Linux.
+    // WebKitGTK crashes on some Linux GPU/driver setups: the DMABUF renderer
+    // kills the web process ("WebKitWebProcess ... fatal error"), and GPU
+    // compositing can fail EGL init ("Could not create default EGL display").
+    // Disable both before the webview starts so it falls back to a compatible
+    // (software) path. Each set only if the user hasn't overridden it. No effect
+    // off Linux.
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    for var in [
+        "WEBKIT_DISABLE_DMABUF_RENDERER",
+        "WEBKIT_DISABLE_COMPOSITING_MODE",
+    ] {
+        if std::env::var_os(var).is_none() {
+            std::env::set_var(var, "1");
+        }
     }
 
     tauri::Builder::default()
