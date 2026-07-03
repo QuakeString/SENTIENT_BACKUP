@@ -5,28 +5,57 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SENTIENT Backup &amp; Restore</title>
   <style>
-    /* Light is the default; dark applies via the OS setting (prefers-color-scheme)
-       or a manual override (html[data-theme]). Accent + header stay branded. */
-    :root { --bg:#eef2f4; --panel:#ffffff; --line:#d3dde2; --fg:#1b2429; --muted:#5c6b73; --accent:#2f9e8f; --accent2:#3a5b63; --err:#c0392b; --input:#f3f7f9; }
-    :root[data-theme="dark"] { --bg:#1b2429; --panel:#243138; --line:#33454e; --fg:#e6edf0; --muted:#93a4ad; --accent:#2f9e8f; --accent2:#3a5b63; --err:#e5675b; --input:#18232a; }
+    :root { --bg:#eef2f4; --panel:#ffffff; --line:#d3dde2; --fg:#1b2429; --muted:#5c6b73; --accent:#2f9e8f; --accent2:#31525a; --err:#c0392b; --input:#f3f7f9; }
+    :root[data-theme="dark"] { --bg:#161e22; --panel:#1f2a30; --line:#33454e; --fg:#e6edf0; --muted:#93a4ad; --accent:#2f9e8f; --accent2:#243138; --err:#e5675b; --input:#18232a; }
     @media (prefers-color-scheme: dark) {
-      :root:not([data-theme="light"]) { --bg:#1b2429; --panel:#243138; --line:#33454e; --fg:#e6edf0; --muted:#93a4ad; --accent:#2f9e8f; --accent2:#3a5b63; --err:#e5675b; --input:#18232a; }
+      :root:not([data-theme="light"]) { --bg:#161e22; --panel:#1f2a30; --line:#33454e; --fg:#e6edf0; --muted:#93a4ad; --accent:#2f9e8f; --accent2:#243138; --err:#e5675b; --input:#18232a; }
     }
     * { box-sizing: border-box; }
-    body { margin:0; font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
-    header { padding:14px 18px; background:var(--accent2); color:#eef4f6; font-weight:600; letter-spacing:.3px; display:flex; justify-content:space-between; align-items:center; }
-    header button.theme { background:transparent; border:0; color:inherit; font-size:16px; line-height:1; cursor:pointer; padding:2px 6px; }
-    main { padding:18px; max-width:960px; margin:0 auto; }
-    .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin-bottom:16px; }
-    .panel h2 { margin:0 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+    html, body { height:100%; }
+    body { margin:0; font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); display:flex; flex-direction:column; overflow:hidden; }
+
+    /* status bar */
+    .statusbar { display:flex; align-items:center; gap:12px; padding:8px 14px; background:var(--accent2); color:#eaf1f2; flex-shrink:0; }
+    .statusbar .brand { display:flex; align-items:center; gap:9px; font-weight:600; letter-spacing:.2px; }
+    .statusbar .brand img { width:22px; height:22px; }
+    .statusbar .spacer { flex:1; }
+    .conn-status { display:flex; align-items:center; gap:7px; font-size:12.5px; opacity:.92; }
+    .dot { width:9px; height:9px; border-radius:50%; background:#8b9aa1; flex-shrink:0; }
+    .conn-status.ok .dot { background:#57d1a0; }
+    .conn-status.err .dot { background:#e5675b; }
+    .iconbtn { background:transparent; border:0; color:inherit; cursor:pointer; padding:5px; border-radius:6px; display:inline-flex; }
+    .iconbtn:hover { background:rgba(255,255,255,.12); }
+
+    /* shell */
+    .shell { flex:1; display:flex; min-height:0; }
+    .sidebar { width:186px; flex-shrink:0; background:var(--panel); border-right:1px solid var(--line); padding:12px 10px; display:flex; flex-direction:column; gap:3px; }
+    .nav { display:flex; align-items:center; gap:11px; padding:9px 12px; border-radius:8px; color:var(--muted); cursor:pointer; font-weight:600; font-size:13.5px; user-select:none; }
+    .nav:hover { background:var(--input); color:var(--fg); }
+    .nav.active { background:var(--accent); color:#04211d; }
+    .sidebar .grow { flex:1; }
+    .sidebar .foot { color:var(--muted); font-size:11px; padding:6px 12px; }
+
+    .content { flex:1; overflow:auto; padding:22px 26px; min-width:0; }
+    .page { display:none; max-width:900px; }
+    .page.active { display:block; }
+    .page h1 { margin:0 0 4px; font-size:20px; font-weight:650; }
+    .page .sub { color:var(--muted); margin:0 0 20px; font-size:13px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:16px; }
+    .card h2 { margin:0 0 12px; font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+
+    /* icons */
+    .icon { width:18px; height:18px; display:inline-block; vertical-align:middle; }
+    .icon-lg { width:20px; height:20px; }
+
+    /* form + shared */
     .row { display:flex; gap:10px; flex-wrap:wrap; align-items:end; }
     label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
-    input { background:var(--input); border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:7px 9px; min-width:120px; }
-    select { background:var(--input); border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:7px 9px; min-width:200px; }
-    button { background:var(--accent); color:#04211d; border:0; border-radius:6px; padding:9px 16px; font-weight:600; cursor:pointer; }
+    input { background:var(--input); border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:8px 10px; min-width:120px; }
+    select { background:var(--input); border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:8px 10px; min-width:220px; }
+    button { background:var(--accent); color:#04211d; border:0; border-radius:7px; padding:9px 16px; font-weight:600; cursor:pointer; }
     button:disabled { opacity:.5; cursor:default; }
     button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
-    .status { color:var(--muted); margin-top:8px; min-height:18px; }
+    .status { color:var(--muted); margin-top:10px; min-height:18px; font-size:13px; }
     .status.err { color:var(--err); }
     table { width:100%; border-collapse:collapse; }
     th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); }
@@ -35,11 +64,9 @@
     .cat-note { color:var(--muted); font-size:12px; }
     .total { font-weight:700; }
     .badge { font-size:11px; color:var(--muted); }
-
-    /* tabs */
-    .tabs { display:flex; gap:4px; margin-bottom:16px; }
-    .tabs button { background:var(--panel); color:var(--muted); border:1px solid var(--line); border-bottom:0; border-radius:8px 8px 0 0; }
-    .tabs button.active { background:var(--accent); color:#04211d; border-color:var(--accent); }
+    .hint { color:var(--muted); font-size:12.5px; }
+    .warn { color:var(--err); font-size:12.5px; }
+    .needs-conn { color:var(--muted); font-size:14px; padding:24px 0; }
 
     /* progress widget */
     .progress { margin-top:16px; }
@@ -52,144 +79,195 @@
     .pstep { font-weight:600; }
     button.link { background:none; border:0; color:var(--accent); cursor:pointer; padding:2px 4px; font-weight:600; white-space:nowrap; }
     .plog { margin:8px 0 0; max-height:220px; overflow:auto; font-size:12px; color:var(--muted); white-space:pre-wrap; background:var(--input); border:1px solid var(--line); border-radius:6px; padding:10px; }
-    .hint { color:var(--muted); font-size:12px; }
-    .warn { color:var(--err); font-size:12.5px; }
   </style>
 </head>
 <body>
-  <header>
-    <span>SENTIENT Backup &amp; Restore</span>
-    <button class="theme" id="themeToggle" title="Toggle light / dark" aria-label="Toggle theme">🌙</button>
-  </header>
-  <main>
-    <section class="panel">
-      <h2>Connection</h2>
-      <div class="row" style="margin-bottom:10px; align-items:end; gap:8px">
-        <label>Saved connections
-          <select id="profiles"><option value="">— none —</option></select>
-        </label>
-        <button class="ghost" id="saveProfileBtn" title="Save current connection (password → OS keychain)">Save</button>
-        <button class="ghost" id="deleteProfileBtn" title="Delete selected">Delete</button>
-      </div>
-      <div class="row">
-        <label>Host<input id="host" value="localhost" /></label>
-        <label>Port<input id="port" value="5432" style="min-width:80px" /></label>
-        <label>Database<input id="dbname" value="sentient" /></label>
-        <label>User<input id="user" value="sentient" /></label>
-        <label>Password<input id="password" type="password" /></label>
-        <button id="connect">Connect</button>
-      </div>
-      <div class="status" id="status"></div>
-    </section>
+  <!-- SVG icon sprite (Feather-style, stroked, inherits currentColor) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></symbol>
+    <symbol id="i-connection" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></symbol>
+    <symbol id="i-backup" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+    <symbol id="i-restore" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  </svg>
 
-    <div class="tabs" id="tabs" style="display:none">
-      <button data-view="backup" class="active">Back up</button>
-      <button data-view="restore">Restore</button>
-      <button data-view="history">History</button>
-    </div>
+  <div class="statusbar">
+    <div class="brand"><img src="logo.png" alt="" /> SENTIENT Backup &amp; Restore</div>
+    <div class="spacer"></div>
+    <div class="conn-status" id="connStatus"><span class="dot"></span> Not connected</div>
+    <button class="iconbtn" id="themeToggle" title="Toggle light / dark">
+      <svg class="icon"><use id="themeIcon" href="#i-moon" /></svg>
+    </button>
+  </div>
 
-    <!-- ===== BACKUP ===== -->
-    <section class="panel view" id="backupView" style="display:none">
-      <h2>Choose what to back up</h2>
-      <table>
-        <thead>
-          <tr><th style="width:34px"></th><th>Component</th><th>Tables</th><th class="rows">Rows</th><th class="size">Size</th></tr>
-        </thead>
-        <tbody id="cats"></tbody>
-        <tfoot>
-          <tr class="total"><td></td><td>Selected total</td><td id="tTables"></td><td class="rows" id="tRows"></td><td class="size" id="tSize"></td></tr>
-        </tfoot>
-      </table>
+  <div class="shell">
+    <nav class="sidebar">
+      <div class="nav active" data-view="connection"><svg class="icon"><use href="#i-connection"/></svg> Connection</div>
+      <div class="nav" data-view="backup"><svg class="icon"><use href="#i-backup"/></svg> Backup</div>
+      <div class="nav" data-view="restore"><svg class="icon"><use href="#i-restore"/></svg> Restore</div>
+      <div class="nav" data-view="history"><svg class="icon"><use href="#i-history"/></svg> History</div>
+      <div class="grow"></div>
+      <div class="nav" data-view="settings"><svg class="icon"><use href="#i-settings"/></svg> Settings</div>
+      <div class="foot">v0.1.14</div>
+    </nav>
 
-      <div id="teleOpts" style="display:none; margin-top:14px; padding-top:12px; border-top:1px solid var(--line)">
-        <span class="cat-note" style="margin-right:12px">Telemetry range</span>
-        <label style="flex-direction:row; align-items:center; gap:6px; display:inline-flex">
-          <input type="radio" name="teleMode" value="all" checked /> All history
-        </label>
-        <label style="flex-direction:row; align-items:center; gap:6px; display:inline-flex; margin-left:16px">
-          <input type="radio" name="teleMode" value="days" /> Last
-          <input id="teleDays" type="number" value="7" min="1" style="min-width:64px; width:64px" /> days
-        </label>
-      </div>
-
-      <div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--line)">
-        <label style="flex-direction:row; align-items:center; gap:8px; display:inline-flex">
-          <input type="checkbox" id="encryptChk" /> 🔒 Password-lock this backup (encrypt)
-        </label>
-        <div class="row" id="encryptFields" style="display:none; margin-top:10px; gap:8px; align-items:end">
-          <label>Password<input id="encPass" type="password" /></label>
-          <label>Confirm<input id="encPass2" type="password" /></label>
-          <span class="hint" id="encHint"></span>
+    <main class="content">
+      <!-- ===== CONNECTION ===== -->
+      <section class="page active" id="connectionPage">
+        <h1>Connection</h1>
+        <p class="sub">Connect to the SENTIENT PostgreSQL database you want to back up or restore.</p>
+        <div class="card">
+          <div class="row" style="margin-bottom:12px; align-items:end; gap:8px">
+            <label>Saved connections
+              <select id="profiles"><option value="">— saved connections —</option></select>
+            </label>
+            <button class="ghost" id="saveProfileBtn" title="Save current connection (password → OS keychain)">Save</button>
+            <button class="ghost" id="deleteProfileBtn" title="Delete selected">Delete</button>
+          </div>
+          <div class="row">
+            <label>Host<input id="host" value="localhost" /></label>
+            <label>Port<input id="port" value="5432" style="min-width:80px" /></label>
+            <label>Database<input id="dbname" value="sentient" /></label>
+            <label>User<input id="user" value="sentient" /></label>
+            <label>Password<input id="password" type="password" /></label>
+            <button id="connect">Connect</button>
+          </div>
+          <div class="status" id="status"></div>
         </div>
-      </div>
+      </section>
 
-      <div class="row" style="margin-top:16px; align-items:center">
-        <button id="backupBtn">Back up…</button>
-        <span class="status" id="backupStatus" style="margin-top:0"></span>
-      </div>
-
-      <div class="progress" id="bProgress" style="display:none">
-        <div class="pbar" id="bBar"><div class="fill"></div></div>
-        <div class="prow">
-          <span class="pstep" id="bStep"></span>
-          <button class="link" id="bToggle" type="button">▸ Details</button>
+      <!-- ===== BACKUP ===== -->
+      <section class="page" id="backupPage">
+        <h1>Backup</h1>
+        <p class="sub">Choose what to include, then write an encrypted or plain archive.</p>
+        <div class="needs-conn" id="backupNeedsConn">Connect to a database first (Connection).</div>
+        <div id="backupBody" style="display:none">
+          <div class="card">
+            <h2>Choose what to back up</h2>
+            <table>
+              <thead>
+                <tr><th style="width:34px"></th><th>Component</th><th>Tables</th><th class="rows">Rows</th><th class="size">Size</th></tr>
+              </thead>
+              <tbody id="cats"></tbody>
+              <tfoot>
+                <tr class="total"><td></td><td>Selected total</td><td id="tTables"></td><td class="rows" id="tRows"></td><td class="size" id="tSize"></td></tr>
+              </tfoot>
+            </table>
+            <div id="teleOpts" style="display:none; margin-top:14px; padding-top:12px; border-top:1px solid var(--line)">
+              <span class="cat-note" style="margin-right:12px">Telemetry range</span>
+              <label style="flex-direction:row; align-items:center; gap:6px; display:inline-flex">
+                <input type="radio" name="teleMode" value="all" checked /> All history
+              </label>
+              <label style="flex-direction:row; align-items:center; gap:6px; display:inline-flex; margin-left:16px">
+                <input type="radio" name="teleMode" value="days" /> Last
+                <input id="teleDays" type="number" value="7" min="1" style="min-width:64px; width:64px" /> days
+              </label>
+            </div>
+          </div>
+          <div class="card">
+            <label style="flex-direction:row; align-items:center; gap:8px; display:inline-flex">
+              <input type="checkbox" id="encryptChk" /> Password-lock this backup (encrypt)
+            </label>
+            <div class="row" id="encryptFields" style="display:none; margin-top:10px; gap:8px; align-items:end">
+              <label>Password<input id="encPass" type="password" /></label>
+              <label>Confirm<input id="encPass2" type="password" /></label>
+              <span class="hint" id="encHint"></span>
+            </div>
+          </div>
+          <div class="row" style="align-items:center">
+            <button id="backupBtn">Back up…</button>
+            <span class="status" id="backupStatus" style="margin-top:0"></span>
+          </div>
+          <div class="progress" id="bProgress" style="display:none">
+            <div class="pbar" id="bBar"><div class="fill"></div></div>
+            <div class="prow"><span class="pstep" id="bStep"></span><button class="link" id="bToggle" type="button">▸ Details</button></div>
+            <pre class="plog" id="bLog" style="display:none"></pre>
+          </div>
         </div>
-        <pre class="plog" id="bLog" style="display:none"></pre>
-      </div>
-    </section>
+      </section>
 
-    <!-- ===== RESTORE ===== -->
-    <section class="panel view" id="restoreView" style="display:none">
-      <h2>Restore from a backup</h2>
-      <p class="hint" style="margin-top:0">
-        Restores a <code>.sentient-backup</code> archive into the database set above.
-        <span class="warn">The target database must be empty</span> — create a fresh one below (or point the Database field at an existing empty database).
-      </p>
-      <div class="row" style="align-items:end; gap:8px">
-        <label>Create a new empty database<input id="newDbName" placeholder="e.g. sentient_restored" /></label>
-        <button class="ghost" id="createDbBtn">Create &amp; use</button>
-        <span class="hint" id="createDbStatus"></span>
-      </div>
-      <div class="row" style="align-items:center; margin-top:16px">
-        <button class="ghost" id="pickBtn">Choose backup file…</button>
-        <span class="hint" id="pickedName">No file selected.</span>
-      </div>
-      <div class="row" id="restorePassRow" style="display:none; margin-top:10px; align-items:end">
-        <label>🔒 Backup password<input id="restorePass" type="password" /></label>
-        <span class="hint">This backup is password-protected.</span>
-      </div>
-      <div class="row" style="margin-top:16px; align-items:center">
-        <button id="restoreBtn" disabled>Restore</button>
-        <span class="status" id="restoreStatus" style="margin-top:0"></span>
-      </div>
-
-      <div class="progress" id="rProgress" style="display:none">
-        <div class="pbar" id="rBar"><div class="fill"></div></div>
-        <div class="prow">
-          <span class="pstep" id="rStep"></span>
-          <button class="link" id="rToggle" type="button">▸ Details</button>
+      <!-- ===== RESTORE ===== -->
+      <section class="page" id="restorePage">
+        <h1>Restore</h1>
+        <p class="sub">Restore an archive into an empty database.</p>
+        <div class="needs-conn" id="restoreNeedsConn">Connect to a database first (Connection).</div>
+        <div id="restoreBody" style="display:none">
+          <div class="card">
+            <p class="hint" style="margin-top:0">
+              <span class="warn">The target database must be empty.</span> Create a fresh one here, or set the Database field on the Connection page to an existing empty database.
+            </p>
+            <div class="row" style="align-items:end; gap:8px">
+              <label>Create a new empty database<input id="newDbName" placeholder="e.g. sentient_restored" /></label>
+              <button class="ghost" id="createDbBtn">Create &amp; use</button>
+              <span class="hint" id="createDbStatus"></span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="row" style="align-items:center">
+              <button class="ghost" id="pickBtn">Choose backup file…</button>
+              <span class="hint" id="pickedName">No file selected.</span>
+            </div>
+            <div class="row" id="restorePassRow" style="display:none; margin-top:10px; align-items:end">
+              <label>🔒 Backup password<input id="restorePass" type="password" /></label>
+              <span class="hint">This backup is password-protected.</span>
+            </div>
+          </div>
+          <div class="row" style="align-items:center">
+            <button id="restoreBtn" disabled>Restore</button>
+            <span class="status" id="restoreStatus" style="margin-top:0"></span>
+          </div>
+          <div class="progress" id="rProgress" style="display:none">
+            <div class="pbar" id="rBar"><div class="fill"></div></div>
+            <div class="prow"><span class="pstep" id="rStep"></span><button class="link" id="rToggle" type="button">▸ Details</button></div>
+            <pre class="plog" id="rLog" style="display:none"></pre>
+          </div>
         </div>
-        <pre class="plog" id="rLog" style="display:none"></pre>
-      </div>
-    </section>
+      </section>
 
-    <!-- ===== HISTORY ===== -->
-    <section class="panel view" id="historyView" style="display:none">
-      <div class="row" style="justify-content:space-between; align-items:center">
-        <h2 style="margin:0">Backups</h2>
-        <button class="ghost" id="clearHistoryBtn">Clear history</button>
-      </div>
-      <table>
-        <thead><tr><th>When</th><th>Database</th><th>Telemetry</th><th class="size">Size</th><th>Status</th><th>Location</th></tr></thead>
-        <tbody id="bHist"></tbody>
-      </table>
-      <h2 style="margin:20px 0 10px">Restores</h2>
-      <table>
-        <thead><tr><th>When</th><th>Into database</th><th>Status</th><th>Archive</th></tr></thead>
-        <tbody id="rHist"></tbody>
-      </table>
-    </section>
-  </main>
+      <!-- ===== HISTORY ===== -->
+      <section class="page" id="historyPage">
+        <div class="row" style="justify-content:space-between; align-items:center">
+          <h1 style="margin:0">History</h1>
+          <button class="ghost" id="clearHistoryBtn">Clear history</button>
+        </div>
+        <p class="sub">Every backup and restore, recorded locally.</p>
+        <div class="card">
+          <h2>Backups</h2>
+          <table>
+            <thead><tr><th>When</th><th>Database</th><th>Telemetry</th><th class="size">Size</th><th>Status</th><th>Location</th></tr></thead>
+            <tbody id="bHist"></tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h2>Restores</h2>
+          <table>
+            <thead><tr><th>When</th><th>Into database</th><th>Status</th><th>Archive</th></tr></thead>
+            <tbody id="rHist"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===== SETTINGS ===== -->
+      <section class="page" id="settingsPage">
+        <h1>Settings</h1>
+        <p class="sub">Appearance and app info.</p>
+        <div class="card">
+          <h2>Theme</h2>
+          <div class="row" style="gap:18px">
+            <label style="flex-direction:row; align-items:center; gap:6px; display:inline-flex"><input type="radio" name="themeMode" value="auto" /> Follow system</label>
+            <label style="flex-direction:row; align-items:center; gap:6px; display:inline-flex"><input type="radio" name="themeMode" value="light" /> Light</label>
+            <label style="flex-direction:row; align-items:center; gap:6px; display:inline-flex"><input type="radio" name="themeMode" value="dark" /> Dark</label>
+          </div>
+        </div>
+        <div class="card">
+          <h2>About</h2>
+          <p class="hint" style="margin:0">SENTIENT Backup &amp; Restore — a standalone tool to back up and restore a SENTIENT PostgreSQL/TimescaleDB database, with selective components, password-lock encryption, and bundled pg tools.</p>
+        </div>
+      </section>
+    </main>
+  </div>
   <script src="app.js"></script>
 </body>
 </html>

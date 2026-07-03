@@ -17,23 +17,35 @@ function effectiveDark() {
   return window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
 function refreshThemeIcon() {
-  const btn = $("themeToggle");
-  if (btn) btn.textContent = effectiveDark() ? "☀️" : "🌙";
+  const use = $("themeIcon");
+  if (use) use.setAttribute("href", effectiveDark() ? "#i-sun" : "#i-moon");
+}
+function currentThemeMode() { return localStorage.getItem("theme") || "auto"; }
+function syncThemeRadios() {
+  const m = currentThemeMode();
+  document.querySelectorAll('input[name="themeMode"]').forEach((r) => (r.checked = r.value === m));
+}
+function applyThemeMode(mode) {
+  if (mode === "auto") {
+    localStorage.removeItem("theme");
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    localStorage.setItem("theme", mode);
+    document.documentElement.setAttribute("data-theme", mode);
+  }
+  refreshThemeIcon();
+  syncThemeRadios();
 }
 function initTheme() {
   const t = localStorage.getItem("theme");
   if (t) document.documentElement.setAttribute("data-theme", t);
   refreshThemeIcon();
+  syncThemeRadios();
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (!localStorage.getItem("theme")) refreshThemeIcon();
   });
 }
-function toggleTheme() {
-  const next = effectiveDark() ? "light" : "dark";
-  localStorage.setItem("theme", next);
-  document.documentElement.setAttribute("data-theme", next);
-  refreshThemeIcon();
-}
+function toggleTheme() { applyThemeMode(effectiveDark() ? "light" : "dark"); }
 
 function humanBytes(b) {
   const u = ["B", "KB", "MB", "GB", "TB", "PB"];
@@ -155,12 +167,13 @@ async function connect() {
   try {
     const res = await invoke("inspect", conn());
     categories = res.categories;
+    connected = true;
+    setConnStatus(`Connected — ${res.server.database} (${res.table_count} tables, ${humanBytes(res.total_bytes)})`, "ok");
     setStatus(
       `Connected to '${res.server.database}' — ${res.server.postgres_version.split(" on ")[0]}` +
       (res.server.timescaledb_version ? `, TimescaleDB ${res.server.timescaledb_version}` : "") +
       ` — ${res.table_count} tables, ${humanBytes(res.total_bytes)} total.`
     );
-    $("tabs").style.display = "";
     const c = conn();
     try {
       await invoke("setting_set", {
@@ -169,11 +182,13 @@ async function connect() {
       });
     } catch { /* store unavailable */ }
     renderCategories();
+    updateGating();
     showView("backup");
   } catch (e) {
+    connected = false;
     setStatus("Error: " + e, true);
-    $("tabs").style.display = "none";
-    document.querySelectorAll(".view").forEach((v) => (v.style.display = "none"));
+    setConnStatus("Connection failed", "err");
+    updateGating();
   } finally {
     $("connect").disabled = false;
   }
@@ -185,15 +200,30 @@ function setStatus(msg, isErr) {
   s.classList.toggle("err", !!isErr);
 }
 
-// ---- Tabs --------------------------------------------------------------------
+// ---- Navigation --------------------------------------------------------------
+let connected = false;
+
 function showView(name) {
-  document.querySelectorAll(".tabs button").forEach((b) =>
+  document.querySelectorAll(".sidebar .nav").forEach((b) =>
     b.classList.toggle("active", b.dataset.view === name)
   );
-  $("backupView").style.display = name === "backup" ? "" : "none";
-  $("restoreView").style.display = name === "restore" ? "" : "none";
-  $("historyView").style.display = name === "history" ? "" : "none";
+  document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
+  const page = $(name + "Page");
+  if (page) page.classList.add("active");
   if (name === "history") loadHistory();
+}
+
+function setConnStatus(text, state) {
+  const el = $("connStatus");
+  el.className = "conn-status" + (state ? " " + state : "");
+  el.innerHTML = `<span class="dot"></span> ${text}`;
+}
+
+function updateGating() {
+  $("backupNeedsConn").style.display = connected ? "none" : "";
+  $("backupBody").style.display = connected ? "" : "none";
+  $("restoreNeedsConn").style.display = connected ? "none" : "";
+  $("restoreBody").style.display = connected ? "" : "none";
 }
 
 // ---- Saved connection profiles ----------------------------------------------
@@ -396,6 +426,7 @@ function toggleEncrypt() {
 
 async function init() {
   initTheme();
+  updateGating();
   if (!invoke) return;
   await loadProfiles();
   try {
@@ -425,7 +456,10 @@ $("saveProfileBtn").addEventListener("click", saveProfile);
 $("deleteProfileBtn").addEventListener("click", deleteProfile);
 $("clearHistoryBtn").addEventListener("click", clearHistory);
 $("encryptChk").addEventListener("change", toggleEncrypt);
-document.querySelectorAll(".tabs button").forEach((b) =>
+document.querySelectorAll(".sidebar .nav").forEach((b) =>
   b.addEventListener("click", () => showView(b.dataset.view))
+);
+document.querySelectorAll('input[name="themeMode"]').forEach((r) =>
+  r.addEventListener("change", () => applyThemeMode(r.value))
 );
 init();
