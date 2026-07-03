@@ -173,6 +173,21 @@ async fn restore(
     })
 }
 
+/// Create a new empty database (restore target) with the given credentials.
+#[tauri::command]
+async fn create_database(
+    host: String,
+    port: u16,
+    dbname: String,
+    user: String,
+    password: String,
+    name: String,
+) -> Result<(), String> {
+    sentient_backup_core::db::create_database(&conn(host, port, dbname, user, password), &name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// The static backup-component catalog (for rendering before connecting).
 #[tauri::command]
 fn default_categories() -> serde_json::Value {
@@ -237,7 +252,8 @@ pub fn run() {
             default_categories,
             file_store_status,
             pick_save_path,
-            pick_open_path
+            pick_open_path,
+            create_database
         ])
         .run(tauri::generate_context!())
         .expect("error while running SENTIENT Backup & Restore");

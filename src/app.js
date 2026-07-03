@@ -229,6 +229,24 @@ async function backup() {
 }
 
 // ---- Restore -----------------------------------------------------------------
+async function createDb() {
+  const name = $("newDbName").value.trim();
+  if (!name) { $("createDbStatus").textContent = "Enter a name."; return; }
+  $("createDbBtn").disabled = true;
+  $("createDbStatus").textContent = "Creating…";
+  try {
+    await invoke("create_database", { ...conn(), name });
+    $("dbname").value = name;
+    await connect();          // connect + inspect the (empty) new DB
+    showView("restore");      // stay on the restore tab
+    $("createDbStatus").textContent = `Created '${name}' — now choose a file and Restore.`;
+  } catch (e) {
+    $("createDbStatus").textContent = "Failed: " + e;
+  } finally {
+    $("createDbBtn").disabled = false;
+  }
+}
+
 async function pickRestoreFile() {
   const p = await invoke("pick_open_path");
   if (!p) return;
@@ -267,6 +285,7 @@ initTheme();
 $("themeToggle").addEventListener("click", toggleTheme);
 $("connect").addEventListener("click", connect);
 $("backupBtn").addEventListener("click", backup);
+$("createDbBtn").addEventListener("click", createDb);
 $("pickBtn").addEventListener("click", pickRestoreFile);
 $("restoreBtn").addEventListener("click", restore);
 document.querySelectorAll(".tabs button").forEach((b) =>

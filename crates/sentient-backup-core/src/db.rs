@@ -237,6 +237,24 @@ impl DbInspector {
     }
 }
 
+/// Create a new (empty) database, for the restore flow's "make a fresh target"
+/// step. Connects to the `postgres` maintenance database with the same
+/// credentials (CREATE DATABASE can't run from within the target itself), so
+/// the user doesn't need psql. Fails if the name already exists.
+pub async fn create_database(cfg: &ConnConfig, name: &str) -> Result<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error::msg("database name is empty"));
+    }
+    let mut maint = cfg.clone();
+    maint.dbname = "postgres".into();
+    let db = DbInspector::connect(&maint).await?;
+    // DDL can't be parameterized — quote as an identifier (doubling any ").
+    let quoted = format!("\"{}\"", name.replace('"', "\"\""));
+    db.batch(&format!("CREATE DATABASE {quoted}")).await?;
+    Ok(())
+}
+
 /// Roll live tables up into category reports (in catalog order).
 pub fn build_report(tables: &[TableInfo]) -> Vec<CategoryReport> {
     // accumulate per category id

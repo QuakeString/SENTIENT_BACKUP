@@ -123,9 +123,14 @@
       <h2>Restore from a backup</h2>
       <p class="hint" style="margin-top:0">
         Restores a <code>.sentient-backup</code> archive into the database set above.
-        <span class="warn">The target database must be empty</span> — create a fresh database and point the Database field at it.
+        <span class="warn">The target database must be empty</span> — create a fresh one below (or point the Database field at an existing empty database).
       </p>
-      <div class="row" style="align-items:center">
+      <div class="row" style="align-items:end; gap:8px">
+        <label>Create a new empty database<input id="newDbName" placeholder="e.g. sentient_restored" /></label>
+        <button class="ghost" id="createDbBtn">Create &amp; use</button>
+        <span class="hint" id="createDbStatus"></span>
+      </div>
+      <div class="row" style="align-items:center; margin-top:16px">
         <button class="ghost" id="pickBtn">Choose backup file…</button>
         <span class="hint" id="pickedName">No file selected.</span>
       </div>
