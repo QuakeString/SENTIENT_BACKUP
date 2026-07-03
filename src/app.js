@@ -291,6 +291,15 @@ async function backup() {
   const mode = document.querySelector('input[name="teleMode"]:checked')?.value;
   const telemetryDays = teleIncluded && mode === "days" ? Number($("teleDays").value) : null;
 
+  let passphrase = null;
+  if ($("encryptChk").checked) {
+    const p1 = $("encPass").value, p2 = $("encPass2").value;
+    if (!p1) { $("encHint").textContent = "Enter a password."; return; }
+    if (p1 !== p2) { $("encHint").textContent = "Passwords don't match."; return; }
+    passphrase = p1;
+  }
+  $("encHint").textContent = "";
+
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "");
   const defaultName = `${$("dbname").value}-${stamp}.sentient-backup`;
   const output = await invoke("pick_save_path", { defaultName });
@@ -306,6 +315,7 @@ async function backup() {
       skip,
       telemetryDays,
       fileStores: [],
+      passphrase,
       onProgress: backupProgress.channel(),
     });
     backupProgress.succeed();
@@ -343,6 +353,11 @@ async function pickRestoreFile() {
   restoreFile = p;
   $("pickedName").textContent = p.split(/[\\/]/).pop();
   $("restoreBtn").disabled = false;
+  try {
+    const enc = await invoke("is_encrypted", { path: p });
+    $("restorePassRow").style.display = enc ? "" : "none";
+    if (!enc) $("restorePass").value = "";
+  } catch { $("restorePassRow").style.display = "none"; }
 }
 
 async function restore() {
@@ -352,11 +367,13 @@ async function restore() {
   $("restoreStatus").textContent = "";
   restoreProgress.start();
   try {
+    const passphrase = $("restorePassRow").style.display !== "none" ? $("restorePass").value : null;
     const res = await invoke("restore", {
       ...conn(),
       input: restoreFile,
       allowNonempty: false,
       fileStorePaths: [],
+      passphrase,
       onProgress: restoreProgress.channel(),
     });
     restoreProgress.succeed();
@@ -371,6 +388,12 @@ async function restore() {
 }
 
 // ---- Init + wiring -----------------------------------------------------------
+function toggleEncrypt() {
+  const on = $("encryptChk").checked;
+  $("encryptFields").style.display = on ? "" : "none";
+  try { invoke("setting_set", { key: "encrypt_default", value: on ? "1" : "0" }); } catch { /* store off */ }
+}
+
 async function init() {
   initTheme();
   if (!invoke) return;
@@ -383,6 +406,10 @@ async function init() {
       if (c.port) $("port").value = c.port;
       if (c.dbname) $("dbname").value = c.dbname;
       if (c.user) $("user").value = c.user;
+    }
+    if ((await invoke("setting_get", { key: "encrypt_default" })) === "1") {
+      $("encryptChk").checked = true;
+      $("encryptFields").style.display = "";
     }
   } catch { /* no saved settings */ }
 }
@@ -397,6 +424,7 @@ $("profiles").addEventListener("change", onProfileSelect);
 $("saveProfileBtn").addEventListener("click", saveProfile);
 $("deleteProfileBtn").addEventListener("click", deleteProfile);
 $("clearHistoryBtn").addEventListener("click", clearHistory);
+$("encryptChk").addEventListener("change", toggleEncrypt);
 document.querySelectorAll(".tabs button").forEach((b) =>
   b.addEventListener("click", () => showView(b.dataset.view))
 );

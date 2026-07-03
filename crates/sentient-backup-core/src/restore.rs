@@ -25,6 +25,8 @@ pub struct RestoreOptions {
     pub allow_nonempty: bool,
     /// Where to extract each file store, keyed by store id. Missing id → skip.
     pub file_store_paths: Vec<(String, PathBuf)>,
+    /// Password for an encrypted (age) archive; required iff it's encrypted.
+    pub passphrase: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -40,7 +42,7 @@ pub async fn run(
     sink: ProgressFn,
 ) -> Result<RestoreSummary> {
     let restorable_stores: Vec<_> = opts.file_store_paths.iter().cloned().collect();
-    let (manifest, members) = read_archive(&opts.input)?;
+    let (manifest, members) = read_archive(&opts.input, opts.passphrase.as_deref())?;
     let has_telemetry = members.contains_key(crate::backup::TELEMETRY_MEMBER);
     let mut steps = Steps::new(sink.clone(), 6 + u32::from(has_telemetry));
     steps.step("Reading backup");
@@ -151,10 +153,36 @@ pub async fn run(
     })
 }
 
+/// True if the archive is an age-encrypted (password-protected) file.
+pub fn is_encrypted(path: &Path) -> Result<bool> {
+    let mut f = File::open(path).map_err(|e| Error::msg(format!("opening backup: {e}")))?;
+    let mut magic = [0u8; 22];
+    let n = f.read(&mut magic).map_err(|e| Error::msg(e.to_string()))?;
+    Ok(magic[..n].starts_with(b"age-encryption.org"))
+}
+
 /// Extract manifest.json + every `db/*` and `files/*` member to temp files.
-fn read_archive(input: &Path) -> Result<(Manifest, HashMap<String, PathBuf>)> {
+/// Transparently decrypts an age-encrypted archive when a passphrase is given.
+fn read_archive(input: &Path, passphrase: Option<&str>) -> Result<(Manifest, HashMap<String, PathBuf>)> {
     let f = File::open(input).map_err(|e| Error::msg(format!("opening backup: {e}")))?;
-    let mut ar = tar::Archive::new(f);
+    let reader: Box<dyn Read> = if is_encrypted(input)? {
+        let pw = passphrase.ok_or_else(|| {
+            Error::msg("this backup is password-protected — a password is required to restore")
+        })?;
+        let decryptor = match age::Decryptor::new(io::BufReader::new(f))
+            .map_err(|e| Error::msg(format!("reading encrypted backup: {e}")))?
+        {
+            age::Decryptor::Passphrase(d) => d,
+            _ => return Err(Error::msg("unsupported encryption type")),
+        };
+        let r = decryptor
+            .decrypt(&age::secrecy::Secret::new(pw.to_owned()), None)
+            .map_err(|_| Error::msg("wrong password, or the backup is corrupted"))?;
+        Box::new(r)
+    } else {
+        Box::new(f)
+    };
+    let mut ar = tar::Archive::new(reader);
     let mut manifest: Option<Manifest> = None;
     let mut members: HashMap<String, PathBuf> = HashMap::new();
 

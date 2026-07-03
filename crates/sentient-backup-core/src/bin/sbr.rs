@@ -78,6 +78,9 @@ struct BackupArgs {
     /// zstd compression level (1..=22).
     #[arg(long, default_value_t = 10)]
     level: i32,
+    /// Password-lock (encrypt) the backup with age.
+    #[arg(long = "encrypt-password", env = "SBR_BACKUP_PASSWORD")]
+    encrypt_password: Option<String>,
 }
 
 #[derive(Args)]
@@ -96,6 +99,9 @@ struct RestoreArgs {
     /// Extract the vc-repos file store (if present) to this directory.
     #[arg(long)]
     vc_repos_path: Option<PathBuf>,
+    /// Password for an encrypted backup.
+    #[arg(long = "encrypt-password", env = "SBR_BACKUP_PASSWORD")]
+    encrypt_password: Option<String>,
 }
 
 impl From<&ConnArgs> for ConnConfig {
@@ -163,6 +169,7 @@ async fn main() -> Result<()> {
                 selection,
                 file_stores,
                 zstd_level: a.level,
+                passphrase: a.encrypt_password.clone(),
             };
             let s = backup::run(&ConnConfig::from(&a.conn), &opts, cli_sink()).await?;
             println!(
@@ -184,6 +191,7 @@ async fn main() -> Result<()> {
                 input: a.input.clone(),
                 allow_nonempty: a.allow_nonempty,
                 file_store_paths,
+                passphrase: a.encrypt_password.clone(),
             };
             let s = restore::run(&ConnConfig::from(&a.conn), &opts, cli_sink()).await?;
             println!(

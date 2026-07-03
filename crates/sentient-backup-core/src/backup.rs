@@ -90,6 +90,8 @@ pub struct BackupOptions {
     /// File stores to include (only reachable ones should be passed).
     pub file_stores: Vec<FileStoreSpec>,
     pub zstd_level: i32,
+    /// If set, the whole archive is passphrase-encrypted with age (scrypt).
+    pub passphrase: Option<String>,
 }
 
 impl Default for BackupOptions {
@@ -99,6 +101,7 @@ impl Default for BackupOptions {
             selection: Selection::full(),
             file_stores: Vec::new(),
             zstd_level: 10,
+            passphrase: None,
         }
     }
 }
@@ -271,9 +274,13 @@ pub async fn run(cfg: &ConnConfig, opts: &BackupOptions, sink: ProgressFn) -> Re
             })
             .collect(),
         file_stores: file_store_entries.clone(),
-        encryption: EncryptionInfo::none(),
+        encryption: if opts.passphrase.is_some() {
+            EncryptionInfo { scheme: "age".into() }
+        } else {
+            EncryptionInfo::none()
+        },
     };
-    write_archive(&opts.output, &manifest, &members)?;
+    write_archive(&opts.output, &manifest, &members, opts.passphrase.as_deref())?;
     for m in &members {
         let _ = std::fs::remove_file(&m.temp);
     }
@@ -352,10 +359,37 @@ fn dump_compressed(
     Ok((tmp, sha, bytes))
 }
 
-fn write_archive(output: &PathBuf, manifest: &Manifest, members: &[StagedMember]) -> Result<()> {
+fn write_archive(
+    output: &PathBuf,
+    manifest: &Manifest,
+    members: &[StagedMember],
+    passphrase: Option<&str>,
+) -> Result<()> {
     let f = File::create(output).map_err(|e| Error::msg(format!("creating archive: {e}")))?;
-    let mut tar = tar::Builder::new(f);
+    match passphrase {
+        // Passphrase → wrap the tar stream in an age (scrypt + ChaCha20-Poly1305)
+        // encryptor so the whole .sentient-backup file is locked.
+        Some(pw) => {
+            let enc = age::Encryptor::with_user_passphrase(age::secrecy::Secret::new(pw.to_owned()));
+            let writer = enc
+                .wrap_output(f)
+                .map_err(|e| Error::msg(format!("encrypting: {e}")))?;
+            let writer = write_tar(writer, manifest, members)?;
+            writer
+                .finish()
+                .map_err(|e| Error::msg(format!("finalizing encryption: {e}")))?;
+        }
+        None => {
+            write_tar(f, manifest, members)?;
+        }
+    }
+    Ok(())
+}
 
+/// Stream the manifest + members into a tar over any writer; returns the writer
+/// (tar trailer written) so an encryption layer can be finalized after.
+fn write_tar<W: std::io::Write>(w: W, manifest: &Manifest, members: &[StagedMember]) -> Result<W> {
+    let mut tar = tar::Builder::new(w);
     let mj = serde_json::to_vec_pretty(manifest).map_err(|e| Error::msg(e.to_string()))?;
     let mut header = tar::Header::new_gnu();
     header.set_size(mj.len() as u64);
@@ -363,13 +397,10 @@ fn write_archive(output: &PathBuf, manifest: &Manifest, members: &[StagedMember]
     header.set_cksum();
     tar.append_data(&mut header, "manifest.json", &mj[..])
         .map_err(|e| Error::msg(e.to_string()))?;
-
     for m in members {
         let mut df = File::open(&m.temp).map_err(|e| Error::msg(e.to_string()))?;
         tar.append_file(&m.archive_path, &mut df)
             .map_err(|e| Error::msg(e.to_string()))?;
     }
-
-    tar.finish().map_err(|e| Error::msg(e.to_string()))?;
-    Ok(())
+    tar.into_inner().map_err(|e| Error::msg(e.to_string()))
 }

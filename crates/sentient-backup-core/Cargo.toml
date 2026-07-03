@@ -30,6 +30,7 @@ chrono.workspace = true
 which.workspace = true
 futures-util.workspace = true
 bytes.workspace = true
+age.workspace = true
 
 # CLI-only
 clap.workspace = true

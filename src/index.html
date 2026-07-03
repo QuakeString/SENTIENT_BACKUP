@@ -112,6 +112,17 @@
         </label>
       </div>
 
+      <div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--line)">
+        <label style="flex-direction:row; align-items:center; gap:8px; display:inline-flex">
+          <input type="checkbox" id="encryptChk" /> 🔒 Password-lock this backup (encrypt)
+        </label>
+        <div class="row" id="encryptFields" style="display:none; margin-top:10px; gap:8px; align-items:end">
+          <label>Password<input id="encPass" type="password" /></label>
+          <label>Confirm<input id="encPass2" type="password" /></label>
+          <span class="hint" id="encHint"></span>
+        </div>
+      </div>
+
       <div class="row" style="margin-top:16px; align-items:center">
         <button id="backupBtn">Back up…</button>
         <span class="status" id="backupStatus" style="margin-top:0"></span>
@@ -142,6 +153,10 @@
       <div class="row" style="align-items:center; margin-top:16px">
         <button class="ghost" id="pickBtn">Choose backup file…</button>
         <span class="hint" id="pickedName">No file selected.</span>
+      </div>
+      <div class="row" id="restorePassRow" style="display:none; margin-top:10px; align-items:end">
+        <label>🔒 Backup password<input id="restorePass" type="password" /></label>
+        <span class="hint">This backup is password-protected.</span>
       </div>
       <div class="row" style="margin-top:16px; align-items:center">
         <button id="restoreBtn" disabled>Restore</button>

@@ -93,6 +93,12 @@ fn file_store_status() -> Vec<FileStoreStatus> {
     files::statuses()
 }
 
+/// Whether a backup archive is password-protected (age-encrypted).
+#[tauri::command]
+fn is_encrypted(path: String) -> Result<bool, String> {
+    restore::is_encrypted(std::path::Path::new(&path)).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn backup(
     app: tauri::AppHandle,
@@ -105,6 +111,7 @@ async fn backup(
     skip: Vec<String>,
     telemetry_days: Option<u32>,
     file_stores: Vec<FileStoreArg>,
+    passphrase: Option<String>,
     on_progress: Channel<Progress>,
 ) -> Result<BackupResult, String> {
     let (host_c, dbname_c, output_c) = (host.clone(), dbname.clone(), output.clone());
@@ -134,6 +141,7 @@ async fn backup(
         selection,
         file_stores: specs,
         zstd_level: 10,
+        passphrase: passphrase.filter(|p| !p.is_empty()),
     };
 
     let start = std::time::Instant::now();
@@ -182,6 +190,7 @@ async fn restore(
     input: String,
     allow_nonempty: bool,
     file_store_paths: Vec<(String, String)>,
+    passphrase: Option<String>,
     on_progress: Channel<Progress>,
 ) -> Result<RestoreResult, String> {
     let (host_c, dbname_c, input_c) = (host.clone(), dbname.clone(), input.clone());
@@ -192,6 +201,7 @@ async fn restore(
             .into_iter()
             .map(|(id, p)| (id, PathBuf::from(p)))
             .collect(),
+        passphrase: passphrase.filter(|p| !p.is_empty()),
     };
     let start = std::time::Instant::now();
     let result = restore::run(
@@ -293,6 +303,7 @@ pub fn run() {
             restore,
             default_categories,
             file_store_status,
+            is_encrypted,
             pick_save_path,
             pick_open_path,
             create_database,
