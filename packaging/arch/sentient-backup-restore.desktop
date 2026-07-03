@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=SENTIENT Backup & Restore
+Comment=Back up and restore a SENTIENT PostgreSQL/TimescaleDB database
+Exec=sentient-backup-restore
+Icon=sentient-backup-restore
+Terminal=false
+Categories=Utility;System;Database;
+StartupWMClass=sentient-backup-restore

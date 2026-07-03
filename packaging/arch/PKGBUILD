@@ -1,0 +1,31 @@
+# Maintainer: SENTIENT Authors
+# Prebuilt package: wraps the CI linux-binary tarball (app + bundled pg tools).
+pkgname=sentient-backup-restore
+pkgver=0.0.0
+pkgrel=1
+pkgdesc="Back up and restore a SENTIENT PostgreSQL/TimescaleDB database (GUI)"
+arch=('x86_64')
+url="https://github.com/QuakeString/SENTIENT_BACKUP"
+license=('Apache')
+depends=('webkit2gtk-4.1' 'gtk3')
+options=('!strip')
+source=('sentient-backup-restore-linux-x64.tar.gz'
+        'sentient-backup-restore.desktop'
+        'sentient-backup-restore.png')
+sha256sums=('SKIP' 'SKIP' 'SKIP')
+
+package() {
+  # app + bundled pg_dump/pg_restore live together so the exe-relative lookup works
+  install -dm755 "$pkgdir/opt/sentient-backup-restore"
+  cp -a "$srcdir/sentient-backup-restore/." "$pkgdir/opt/sentient-backup-restore/"
+  chmod +x "$pkgdir/opt/sentient-backup-restore/sentient-backup-restore"
+
+  install -dm755 "$pkgdir/usr/bin"
+  ln -s /opt/sentient-backup-restore/sentient-backup-restore \
+    "$pkgdir/usr/bin/sentient-backup-restore"
+
+  install -Dm644 "$srcdir/sentient-backup-restore.desktop" \
+    "$pkgdir/usr/share/applications/sentient-backup-restore.desktop"
+  install -Dm644 "$srcdir/sentient-backup-restore.png" \
+    "$pkgdir/usr/share/icons/hicolor/128x128/apps/sentient-backup-restore.png"
+}

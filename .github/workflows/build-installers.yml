@@ -80,3 +80,39 @@ jobs:
           name: linux-binary
           if-no-files-found: error
           path: sentient-backup-restore-linux-x64.tar.gz
+
+  # Native Arch Linux package (.pkg.tar.zst) built with makepkg in an Arch
+  # container from the linux-binary tarball. Adds a .desktop + icon (so it shows
+  # in the launcher/taskbar) and declares its deps for pacman.
+  arch-package:
+    name: arch package
+    runs-on: ubuntu-latest
+    needs: bundle
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download linux-binary
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-binary
+          path: pkgsrc
+      - name: Build .pkg.tar.zst
+        run: |
+          cp packaging/arch/PKGBUILD pkgsrc/
+          cp packaging/arch/sentient-backup-restore.desktop pkgsrc/
+          cp src-tauri/icons/128x128.png pkgsrc/sentient-backup-restore.png
+          ver="${GITHUB_REF_NAME#v}"; [ -n "$ver" ] && [ "$ver" != "$GITHUB_REF_NAME" ] || ver="0.0.0"
+          sed -i "s/^pkgver=.*/pkgver=${ver}/" pkgsrc/PKGBUILD
+          docker run --rm -v "$PWD/pkgsrc:/pkg" archlinux:latest bash -c '
+            pacman -Sy --noconfirm --needed base-devel sudo >/dev/null
+            useradd -m builder
+            chown -R builder /pkg
+            cd /pkg
+            sudo -u builder makepkg -f --nodeps
+          '
+          ls -l pkgsrc/*.pkg.tar.zst
+      - name: Upload Arch package
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-package
+          if-no-files-found: error
+          path: pkgsrc/*.pkg.tar.zst
