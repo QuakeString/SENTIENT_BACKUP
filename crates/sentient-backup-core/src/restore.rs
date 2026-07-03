@@ -203,6 +203,7 @@ fn pg_restore_stream(
     let mut child = crate::pg_tools::command(&tools.pg_restore)
         .args([
             "--no-password",
+            "--verbose",
             "--exit-on-error",
             "-h",
             &cfg.host,

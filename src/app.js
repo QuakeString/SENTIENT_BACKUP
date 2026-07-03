@@ -1,10 +1,12 @@
-// Phase-0 frontend. Uses Tauri's global `invoke` (withGlobalTauri = true).
-// Later phases will move this to Svelte/TS with a proper build step.
+// Frontend for the SENTIENT Backup & Restore desktop app. Uses Tauri's global
+// `invoke` / `Channel` (withGlobalTauri = true) — no bundler.
 
 const invoke = window.__TAURI__?.core?.invoke;
+const Channel = window.__TAURI__?.core?.Channel;
 
 const $ = (id) => document.getElementById(id);
 let categories = []; // last inspect result
+let restoreFile = null; // chosen archive path
 
 function humanBytes(b) {
   const u = ["B", "KB", "MB", "GB", "TB", "PB"];
@@ -13,6 +15,71 @@ function humanBytes(b) {
   return i === 0 ? `${b} B` : `${v.toFixed(1)} ${u[i]}`;
 }
 
+function conn() {
+  return {
+    host: $("host").value,
+    port: Number($("port").value),
+    dbname: $("dbname").value,
+    user: $("user").value,
+    password: $("password").value,
+  };
+}
+
+// ---- Reusable progress widget (animated bar + collapsible verbose log) -------
+function ProgressView(prefix) {
+  const el = (s) => $(prefix + s);
+  const bar = () => el("Bar");
+  const fill = () => bar().querySelector(".fill");
+
+  el("Toggle").addEventListener("click", () => {
+    const log = el("Log");
+    const open = log.style.display !== "none";
+    log.style.display = open ? "none" : "";
+    el("Toggle").textContent = (open ? "▸" : "▾") + " Details";
+  });
+
+  return {
+    start() {
+      el("Progress").style.display = "";
+      el("Log").textContent = "";
+      el("Step").textContent = "Starting…";
+      bar().classList.remove("err");
+      bar().classList.add("active");
+      fill().style.width = "4%";
+    },
+    message(p) {
+      if (p.type === "step") {
+        el("Step").textContent = `[${p.index}/${p.total}] ${p.name}`;
+        fill().style.width = Math.round((p.index / p.total) * 100) + "%";
+      } else if (p.type === "log") {
+        const lg = el("Log");
+        lg.textContent += p.line + "\n";
+        lg.scrollTop = lg.scrollHeight;
+      } else if (p.type === "done") {
+        el("Step").textContent = "✓ " + p.message;
+        fill().style.width = "100%";
+        bar().classList.remove("active");
+      }
+    },
+    succeed() {
+      bar().classList.remove("active");
+      fill().style.width = "100%";
+    },
+    fail() {
+      bar().classList.remove("active");
+      bar().classList.add("err");
+    },
+    channel() {
+      const ch = new Channel();
+      ch.onmessage = (p) => this.message(p);
+      return ch;
+    },
+  };
+}
+const backupProgress = ProgressView("b");
+const restoreProgress = ProgressView("r");
+
+// ---- Connection / inspect ----------------------------------------------------
 function recalcTotal() {
   let bytes = 0, rows = 0, tables = 0;
   document.querySelectorAll("input.cat[type=checkbox]").forEach((cb) => {
@@ -27,8 +94,6 @@ function recalcTotal() {
 }
 
 function syncTeleOpts() {
-  // Telemetry range controls are only relevant when the historical-telemetry
-  // component is selected.
   const cb = document.querySelector('input.cat[data-cid="telemetry_historical"]');
   $("teleOpts").style.display = cb && cb.checked ? "" : "none";
 }
@@ -56,7 +121,46 @@ function renderCategories() {
   syncTeleOpts();
 }
 
-// Ids of unchecked, skippable components (locked ones are disabled+checked).
+async function connect() {
+  if (!invoke) { setStatus("Not running inside Tauri.", true); return; }
+  $("connect").disabled = true;
+  setStatus("Connecting…");
+  try {
+    const res = await invoke("inspect", conn());
+    categories = res.categories;
+    setStatus(
+      `Connected to '${res.server.database}' — ${res.server.postgres_version.split(" on ")[0]}` +
+      (res.server.timescaledb_version ? `, TimescaleDB ${res.server.timescaledb_version}` : "") +
+      ` — ${res.table_count} tables, ${humanBytes(res.total_bytes)} total.`
+    );
+    $("tabs").style.display = "";
+    renderCategories();
+    showView("backup");
+  } catch (e) {
+    setStatus("Error: " + e, true);
+    $("tabs").style.display = "none";
+    document.querySelectorAll(".view").forEach((v) => (v.style.display = "none"));
+  } finally {
+    $("connect").disabled = false;
+  }
+}
+
+function setStatus(msg, isErr) {
+  const s = $("status");
+  s.textContent = msg;
+  s.classList.toggle("err", !!isErr);
+}
+
+// ---- Tabs --------------------------------------------------------------------
+function showView(name) {
+  document.querySelectorAll(".tabs button").forEach((b) =>
+    b.classList.toggle("active", b.dataset.view === name)
+  );
+  $("backupView").style.display = name === "backup" ? "" : "none";
+  $("restoreView").style.display = name === "restore" ? "" : "none";
+}
+
+// ---- Backup ------------------------------------------------------------------
 function skipList() {
   const skip = [];
   document.querySelectorAll("input.cat[type=checkbox]").forEach((cb) => {
@@ -65,34 +169,11 @@ function skipList() {
   return skip;
 }
 
-function conn() {
-  return {
-    host: $("host").value,
-    port: Number($("port").value),
-    dbname: $("dbname").value,
-    user: $("user").value,
-    password: $("password").value,
-  };
-}
-
-function onProgress(p) {
-  if (p.type === "step") {
-    $("progressStep").textContent = `[${p.index}/${p.total}] ${p.name}`;
-  } else if (p.type === "log") {
-    const el = $("progressLog");
-    el.textContent += p.line + "\n";
-    el.scrollTop = el.scrollHeight;
-  } else if (p.type === "done") {
-    $("progressStep").textContent = "✓ " + p.message;
-  }
-}
-
 async function backup() {
   const skip = skipList();
   const teleIncluded = !skip.includes("telemetry_historical");
   const mode = document.querySelector('input[name="teleMode"]:checked')?.value;
-  const telemetryDays =
-    teleIncluded && mode === "days" ? Number($("teleDays").value) : null;
+  const telemetryDays = teleIncluded && mode === "days" ? Number($("teleDays").value) : null;
 
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "");
   const defaultName = `${$("dbname").value}-${stamp}.sentient-backup`;
@@ -101,13 +182,7 @@ async function backup() {
 
   $("backupBtn").disabled = true;
   $("backupStatus").textContent = "";
-  $("progressLog").textContent = "";
-  $("progressStep").textContent = "Starting…";
-  $("progressPanel").style.display = "";
-
-  const channel = new window.__TAURI__.core.Channel();
-  channel.onmessage = onProgress;
-
+  backupProgress.start();
   try {
     const res = await invoke("backup", {
       ...conn(),
@@ -115,44 +190,57 @@ async function backup() {
       skip,
       telemetryDays,
       fileStores: [],
-      onProgress: channel,
+      onProgress: backupProgress.channel(),
     });
-    $("backupStatus").textContent =
-      `Backup complete — ${humanBytes(res.archive_bytes)} → ${res.output}`;
+    backupProgress.succeed();
+    $("backupStatus").textContent = `Done — ${humanBytes(res.archive_bytes)} → ${res.output}`;
   } catch (e) {
-    $("progressStep").textContent = "";
+    backupProgress.fail();
     $("backupStatus").textContent = "Backup failed: " + e;
   } finally {
     $("backupBtn").disabled = false;
   }
 }
 
-async function connect() {
-  if (!invoke) { $("status").textContent = "Not running inside Tauri."; return; }
-  $("connect").disabled = true;
-  $("status").textContent = "Connecting…";
+// ---- Restore -----------------------------------------------------------------
+async function pickRestoreFile() {
+  const p = await invoke("pick_open_path");
+  if (!p) return;
+  restoreFile = p;
+  $("pickedName").textContent = p.split(/[\\/]/).pop();
+  $("restoreBtn").disabled = false;
+}
+
+async function restore() {
+  if (!restoreFile) return;
+  $("restoreBtn").disabled = true;
+  $("pickBtn").disabled = true;
+  $("restoreStatus").textContent = "";
+  restoreProgress.start();
   try {
-    const res = await invoke("inspect", {
-      host: $("host").value,
-      port: Number($("port").value),
-      dbname: $("dbname").value,
-      user: $("user").value,
-      password: $("password").value,
+    const res = await invoke("restore", {
+      ...conn(),
+      input: restoreFile,
+      allowNonempty: false,
+      fileStorePaths: [],
+      onProgress: restoreProgress.channel(),
     });
-    categories = res.categories;
-    $("status").textContent =
-      `Connected to '${res.server.database}' — ${res.server.postgres_version.split(" on ")[0]}` +
-      (res.server.timescaledb_version ? `, TimescaleDB ${res.server.timescaledb_version}` : "") +
-      ` — ${res.table_count} tables, ${humanBytes(res.total_bytes)} total.`;
-    $("backupPanel").style.display = "";
-    renderCategories();
+    restoreProgress.succeed();
+    $("restoreStatus").textContent = `Restored into '${res.database}'.`;
   } catch (e) {
-    $("status").textContent = "Error: " + e;
-    $("backupPanel").style.display = "none";
+    restoreProgress.fail();
+    $("restoreStatus").textContent = "Restore failed: " + e;
   } finally {
-    $("connect").disabled = false;
+    $("restoreBtn").disabled = false;
+    $("pickBtn").disabled = false;
   }
 }
 
+// ---- Wiring ------------------------------------------------------------------
 $("connect").addEventListener("click", connect);
 $("backupBtn").addEventListener("click", backup);
+$("pickBtn").addEventListener("click", pickRestoreFile);
+$("restoreBtn").addEventListener("click", restore);
+document.querySelectorAll(".tabs button").forEach((b) =>
+  b.addEventListener("click", () => showView(b.dataset.view))
+);

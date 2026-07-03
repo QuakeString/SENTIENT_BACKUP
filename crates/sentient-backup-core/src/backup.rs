@@ -299,6 +299,7 @@ fn dump_compressed(
     let port = cfg.port.to_string();
     let mut args: Vec<String> = vec![
         "--format=custom".into(),
+        "--verbose".into(),
         "--no-password".into(),
         "-h".into(),
         cfg.host.clone(),
