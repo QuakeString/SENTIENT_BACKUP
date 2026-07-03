@@ -247,28 +247,42 @@ fn default_categories() -> serde_json::Value {
 }
 
 /// Native "Save As" dialog for choosing where to write the backup archive.
-/// Returns the chosen path, or `None` if the user cancelled. Sync command so
-/// the blocking dialog runs off the async runtime / main thread.
+/// Returns the chosen path, or `None` if the user cancelled. Async +
+/// callback-based (NOT blocking): the blocking dialog deadlocks the GTK main
+/// loop on Linux; the async form dispatches to the main thread correctly on all
+/// platforms.
 #[tauri::command]
-fn pick_save_path(app: tauri::AppHandle, default_name: String) -> Option<String> {
+async fn pick_save_path(app: tauri::AppHandle, default_name: String) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
         .add_filter("SENTIENT backup", &["sentient-backup"])
         .set_file_name(default_name)
-        .blocking_save_file()
+        .save_file(move |p| {
+            let _ = tx.send(p);
+        });
+    rx.await
+        .ok()
+        .flatten()
         .and_then(|fp| fp.into_path().ok())
         .map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Native "Open" dialog for choosing a backup archive to restore.
 #[tauri::command]
-fn pick_open_path(app: tauri::AppHandle) -> Option<String> {
+async fn pick_open_path(app: tauri::AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
         .add_filter("SENTIENT backup", &["sentient-backup"])
-        .blocking_pick_file()
+        .pick_file(move |p| {
+            let _ = tx.send(p);
+        });
+    rx.await
+        .ok()
+        .flatten()
         .and_then(|fp| fp.into_path().ok())
         .map(|p| p.to_string_lossy().into_owned())
 }
