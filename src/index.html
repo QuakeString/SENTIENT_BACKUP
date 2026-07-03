@@ -5,16 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SENTIENT Backup &amp; Restore</title>
   <style>
-    :root { --bg:#1b2429; --panel:#243138; --line:#33454e; --fg:#e6edf0; --muted:#93a4ad; --accent:#2f9e8f; --accent2:#3a5b63; --err:#e5675b; }
+    /* Light is the default; dark applies via the OS setting (prefers-color-scheme)
+       or a manual override (html[data-theme]). Accent + header stay branded. */
+    :root { --bg:#eef2f4; --panel:#ffffff; --line:#d3dde2; --fg:#1b2429; --muted:#5c6b73; --accent:#2f9e8f; --accent2:#3a5b63; --err:#c0392b; --input:#f3f7f9; }
+    :root[data-theme="dark"] { --bg:#1b2429; --panel:#243138; --line:#33454e; --fg:#e6edf0; --muted:#93a4ad; --accent:#2f9e8f; --accent2:#3a5b63; --err:#e5675b; --input:#18232a; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) { --bg:#1b2429; --panel:#243138; --line:#33454e; --fg:#e6edf0; --muted:#93a4ad; --accent:#2f9e8f; --accent2:#3a5b63; --err:#e5675b; --input:#18232a; }
+    }
     * { box-sizing: border-box; }
     body { margin:0; font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
-    header { padding:14px 18px; background:var(--accent2); font-weight:600; letter-spacing:.3px; }
+    header { padding:14px 18px; background:var(--accent2); color:#eef4f6; font-weight:600; letter-spacing:.3px; display:flex; justify-content:space-between; align-items:center; }
+    header button.theme { background:transparent; border:0; color:inherit; font-size:16px; line-height:1; cursor:pointer; padding:2px 6px; }
     main { padding:18px; max-width:960px; margin:0 auto; }
     .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin-bottom:16px; }
     .panel h2 { margin:0 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
     .row { display:flex; gap:10px; flex-wrap:wrap; align-items:end; }
     label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
-    input { background:#18232a; border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:7px 9px; min-width:120px; }
+    input { background:var(--input); border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:7px 9px; min-width:120px; }
     button { background:var(--accent); color:#04211d; border:0; border-radius:6px; padding:9px 16px; font-weight:600; cursor:pointer; }
     button:disabled { opacity:.5; cursor:default; }
     button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
@@ -43,13 +50,16 @@
     .prow { display:flex; justify-content:space-between; align-items:center; margin-top:8px; gap:10px; }
     .pstep { font-weight:600; }
     button.link { background:none; border:0; color:var(--accent); cursor:pointer; padding:2px 4px; font-weight:600; white-space:nowrap; }
-    .plog { margin:8px 0 0; max-height:220px; overflow:auto; font-size:12px; color:var(--muted); white-space:pre-wrap; background:#18232a; border:1px solid var(--line); border-radius:6px; padding:10px; }
+    .plog { margin:8px 0 0; max-height:220px; overflow:auto; font-size:12px; color:var(--muted); white-space:pre-wrap; background:var(--input); border:1px solid var(--line); border-radius:6px; padding:10px; }
     .hint { color:var(--muted); font-size:12px; }
     .warn { color:var(--err); font-size:12.5px; }
   </style>
 </head>
 <body>
-  <header>SENTIENT Backup &amp; Restore</header>
+  <header>
+    <span>SENTIENT Backup &amp; Restore</span>
+    <button class="theme" id="themeToggle" title="Toggle light / dark" aria-label="Toggle theme">🌙</button>
+  </header>
   <main>
     <section class="panel">
       <h2>Connection</h2>

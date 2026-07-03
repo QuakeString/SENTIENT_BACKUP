@@ -8,6 +8,32 @@ const $ = (id) => document.getElementById(id);
 let categories = []; // last inspect result
 let restoreFile = null; // chosen archive path
 
+// ---- Theme: follow OS by default, manual override persisted in localStorage --
+function effectiveDark() {
+  const t = localStorage.getItem("theme");
+  if (t === "dark") return true;
+  if (t === "light") return false;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+function refreshThemeIcon() {
+  const btn = $("themeToggle");
+  if (btn) btn.textContent = effectiveDark() ? "☀️" : "🌙";
+}
+function initTheme() {
+  const t = localStorage.getItem("theme");
+  if (t) document.documentElement.setAttribute("data-theme", t);
+  refreshThemeIcon();
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (!localStorage.getItem("theme")) refreshThemeIcon();
+  });
+}
+function toggleTheme() {
+  const next = effectiveDark() ? "light" : "dark";
+  localStorage.setItem("theme", next);
+  document.documentElement.setAttribute("data-theme", next);
+  refreshThemeIcon();
+}
+
 function humanBytes(b) {
   const u = ["B", "KB", "MB", "GB", "TB", "PB"];
   let v = b, i = 0;
@@ -237,6 +263,8 @@ async function restore() {
 }
 
 // ---- Wiring ------------------------------------------------------------------
+initTheme();
+$("themeToggle").addEventListener("click", toggleTheme);
 $("connect").addEventListener("click", connect);
 $("backupBtn").addEventListener("click", backup);
 $("pickBtn").addEventListener("click", pickRestoreFile);
