@@ -7,6 +7,7 @@ const Channel = window.__TAURI__?.core?.Channel;
 const $ = (id) => document.getElementById(id);
 let categories = []; // last inspect result
 let restoreFile = null; // chosen archive path
+let profilesList = []; // saved connection profiles
 
 // ---- Theme: follow OS by default, manual override persisted in localStorage --
 function effectiveDark() {
@@ -160,6 +161,13 @@ async function connect() {
       ` — ${res.table_count} tables, ${humanBytes(res.total_bytes)} total.`
     );
     $("tabs").style.display = "";
+    const c = conn();
+    try {
+      await invoke("setting_set", {
+        key: "last_conn",
+        value: JSON.stringify({ host: c.host, port: c.port, dbname: c.dbname, user: c.user }),
+      });
+    } catch { /* store unavailable */ }
     renderCategories();
     showView("backup");
   } catch (e) {
@@ -184,6 +192,88 @@ function showView(name) {
   );
   $("backupView").style.display = name === "backup" ? "" : "none";
   $("restoreView").style.display = name === "restore" ? "" : "none";
+  $("historyView").style.display = name === "history" ? "" : "none";
+  if (name === "history") loadHistory();
+}
+
+// ---- Saved connection profiles ----------------------------------------------
+async function loadProfiles() {
+  try { profilesList = await invoke("list_connections"); } catch { profilesList = []; }
+  const sel = $("profiles");
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— saved connections —</option>' +
+    profilesList.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
+  sel.value = cur;
+}
+
+async function onProfileSelect() {
+  const id = Number($("profiles").value);
+  if (!id) return;
+  const p = profilesList.find((x) => x.id === id);
+  if (!p) return;
+  $("host").value = p.host; $("port").value = p.port;
+  $("dbname").value = p.dbname; $("user").value = p.username;
+  $("password").value = "";
+  if (p.has_password) {
+    try {
+      const pw = await invoke("get_connection_password", { id });
+      if (pw != null) $("password").value = pw;
+    } catch { /* keychain unavailable */ }
+  }
+}
+
+async function saveProfile() {
+  const c = conn();
+  const name = `${c.user}@${c.host}:${c.port}/${c.dbname}`;
+  const existing = profilesList.find((p) => p.name === name);
+  try {
+    const id = await invoke("save_connection", {
+      profile: {
+        id: existing ? existing.id : null,
+        name, host: c.host, port: c.port, dbname: c.dbname,
+        username: c.user, password: c.password || null,
+      },
+    });
+    await loadProfiles();
+    $("profiles").value = String(id);
+    setStatus(`Saved '${name}'` + (c.password ? " (password in OS keychain)." : "."));
+  } catch (e) { setStatus("Save failed: " + e, true); }
+}
+
+async function deleteProfile() {
+  const id = Number($("profiles").value);
+  if (!id) return;
+  try { await invoke("delete_connection", { id }); await loadProfiles(); $("profiles").value = ""; }
+  catch (e) { setStatus("Delete failed: " + e, true); }
+}
+
+// ---- History -----------------------------------------------------------------
+function fmtWhen(ts) { try { return new Date(ts).toLocaleString(); } catch { return ts; } }
+function statusBadge(s) {
+  const color = s === "success" ? "var(--accent)" : "var(--err)";
+  return `<span style="color:${color}; font-weight:600">${s || ""}</span>`;
+}
+function baseName(p) { return (p || "").split(/[\\/]/).pop(); }
+
+async function loadHistory() {
+  try {
+    const b = await invoke("list_backup_history");
+    $("bHist").innerHTML = b.map((r) => `<tr>
+      <td>${fmtWhen(r.ts)}</td><td>${r.dbname || ""}</td><td>${r.telemetry || ""}</td>
+      <td class="size">${r.status === "success" ? humanBytes(r.archive_bytes) : ""}</td>
+      <td>${statusBadge(r.status)}</td>
+      <td class="cat-note" title="${r.message || r.output || ""}">${baseName(r.output) || (r.message || "")}</td></tr>`).join("")
+      || `<tr><td colspan="6" class="cat-note">No backups yet.</td></tr>`;
+    const rr = await invoke("list_restore_history");
+    $("rHist").innerHTML = rr.map((r) => `<tr>
+      <td>${fmtWhen(r.ts)}</td><td>${r.dbname || ""}</td><td>${statusBadge(r.status)}</td>
+      <td class="cat-note" title="${r.message || r.input || ""}">${baseName(r.input)}</td></tr>`).join("")
+      || `<tr><td colspan="4" class="cat-note">No restores yet.</td></tr>`;
+  } catch (e) { setStatus("History error: " + e, true); }
+}
+
+async function clearHistory() {
+  try { await invoke("clear_history"); await loadHistory(); } catch (e) { setStatus("Clear failed: " + e, true); }
 }
 
 // ---- Backup ------------------------------------------------------------------
@@ -280,14 +370,34 @@ async function restore() {
   }
 }
 
-// ---- Wiring ------------------------------------------------------------------
-initTheme();
+// ---- Init + wiring -----------------------------------------------------------
+async function init() {
+  initTheme();
+  if (!invoke) return;
+  await loadProfiles();
+  try {
+    const last = await invoke("setting_get", { key: "last_conn" });
+    if (last) {
+      const c = JSON.parse(last);
+      if (c.host) $("host").value = c.host;
+      if (c.port) $("port").value = c.port;
+      if (c.dbname) $("dbname").value = c.dbname;
+      if (c.user) $("user").value = c.user;
+    }
+  } catch { /* no saved settings */ }
+}
+
 $("themeToggle").addEventListener("click", toggleTheme);
 $("connect").addEventListener("click", connect);
 $("backupBtn").addEventListener("click", backup);
 $("createDbBtn").addEventListener("click", createDb);
 $("pickBtn").addEventListener("click", pickRestoreFile);
 $("restoreBtn").addEventListener("click", restore);
+$("profiles").addEventListener("change", onProfileSelect);
+$("saveProfileBtn").addEventListener("click", saveProfile);
+$("deleteProfileBtn").addEventListener("click", deleteProfile);
+$("clearHistoryBtn").addEventListener("click", clearHistory);
 document.querySelectorAll(".tabs button").forEach((b) =>
   b.addEventListener("click", () => showView(b.dataset.view))
 );
+init();

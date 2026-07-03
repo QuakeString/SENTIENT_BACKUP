@@ -18,6 +18,8 @@ use sentient_backup_core::files::{self, FileStoreStatus};
 use sentient_backup_core::progress::{Progress, ProgressFn};
 use sentient_backup_core::restore::{self, RestoreOptions};
 
+mod store;
+
 #[derive(Serialize)]
 pub struct InspectResult {
     server: ServerInfo,
@@ -93,6 +95,7 @@ fn file_store_status() -> Vec<FileStoreStatus> {
 
 #[tauri::command]
 async fn backup(
+    app: tauri::AppHandle,
     host: String,
     port: u16,
     dbname: String,
@@ -104,6 +107,17 @@ async fn backup(
     file_stores: Vec<FileStoreArg>,
     on_progress: Channel<Progress>,
 ) -> Result<BackupResult, String> {
+    let (host_c, dbname_c, output_c) = (host.clone(), dbname.clone(), output.clone());
+    let telemetry_label = if skip.iter().any(|s| s == "telemetry_historical") {
+        "excluded".to_string()
+    } else {
+        match telemetry_days {
+            Some(n) => format!("last {n}d"),
+            None => "all".to_string(),
+        }
+    };
+    let skipped_label = skip.join(",");
+
     let mut selection = Selection::skipping(&skip);
     selection.telemetry_days = telemetry_days;
     let specs = file_stores
@@ -121,19 +135,35 @@ async fn backup(
         file_stores: specs,
         zstd_level: 10,
     };
-    let s = backup::run(
+
+    let start = std::time::Instant::now();
+    let result = backup::run(
         &conn(host, port, dbname, user, password),
         &opts,
         channel_sink(on_progress),
     )
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(BackupResult {
-        output: s.output.display().to_string(),
-        archive_bytes: s.archive_bytes,
-        dump_sha256: s.dump_sha256,
-        file_stores: s.file_stores,
-    })
+    .await;
+    let dur = start.elapsed().as_millis() as i64;
+
+    match result {
+        Ok(s) => {
+            let out = s.output.display().to_string();
+            store::record_backup(&app, &host_c, &dbname_c, &out, s.archive_bytes as i64,
+                &s.dump_sha256, &skipped_label, &telemetry_label, "success", "", dur);
+            Ok(BackupResult {
+                output: out,
+                archive_bytes: s.archive_bytes,
+                dump_sha256: s.dump_sha256,
+                file_stores: s.file_stores,
+            })
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            store::record_backup(&app, &host_c, &dbname_c, &output_c, 0, "",
+                &skipped_label, &telemetry_label, "failed", &msg, dur);
+            Err(msg)
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -143,6 +173,7 @@ pub struct RestoreResult {
 
 #[tauri::command]
 async fn restore(
+    app: tauri::AppHandle,
     host: String,
     port: u16,
     dbname: String,
@@ -153,6 +184,7 @@ async fn restore(
     file_store_paths: Vec<(String, String)>,
     on_progress: Channel<Progress>,
 ) -> Result<RestoreResult, String> {
+    let (host_c, dbname_c, input_c) = (host.clone(), dbname.clone(), input.clone());
     let opts = RestoreOptions {
         input: PathBuf::from(input),
         allow_nonempty,
@@ -161,16 +193,26 @@ async fn restore(
             .map(|(id, p)| (id, PathBuf::from(p)))
             .collect(),
     };
-    let s = restore::run(
+    let start = std::time::Instant::now();
+    let result = restore::run(
         &conn(host, port, dbname, user, password),
         &opts,
         channel_sink(on_progress),
     )
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(RestoreResult {
-        database: s.database,
-    })
+    .await;
+    let dur = start.elapsed().as_millis() as i64;
+
+    match result {
+        Ok(s) => {
+            store::record_restore(&app, &host_c, &dbname_c, &input_c, "success", "", dur);
+            Ok(RestoreResult { database: s.database })
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            store::record_restore(&app, &host_c, &dbname_c, &input_c, "failed", &msg, dur);
+            Err(msg)
+        }
+    }
 }
 
 /// Create a new empty database (restore target) with the given credentials.
@@ -253,7 +295,16 @@ pub fn run() {
             file_store_status,
             pick_save_path,
             pick_open_path,
-            create_database
+            create_database,
+            store::list_connections,
+            store::save_connection,
+            store::delete_connection,
+            store::get_connection_password,
+            store::list_backup_history,
+            store::list_restore_history,
+            store::clear_history,
+            store::setting_get,
+            store::setting_set
         ])
         .run(tauri::generate_context!())
         .expect("error while running SENTIENT Backup & Restore");

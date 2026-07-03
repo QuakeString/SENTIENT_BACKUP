@@ -22,6 +22,7 @@
     .row { display:flex; gap:10px; flex-wrap:wrap; align-items:end; }
     label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
     input { background:var(--input); border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:7px 9px; min-width:120px; }
+    select { background:var(--input); border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:7px 9px; min-width:200px; }
     button { background:var(--accent); color:#04211d; border:0; border-radius:6px; padding:9px 16px; font-weight:600; cursor:pointer; }
     button:disabled { opacity:.5; cursor:default; }
     button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
@@ -63,6 +64,13 @@
   <main>
     <section class="panel">
       <h2>Connection</h2>
+      <div class="row" style="margin-bottom:10px; align-items:end; gap:8px">
+        <label>Saved connections
+          <select id="profiles"><option value="">— none —</option></select>
+        </label>
+        <button class="ghost" id="saveProfileBtn" title="Save current connection (password → OS keychain)">Save</button>
+        <button class="ghost" id="deleteProfileBtn" title="Delete selected">Delete</button>
+      </div>
       <div class="row">
         <label>Host<input id="host" value="localhost" /></label>
         <label>Port<input id="port" value="5432" style="min-width:80px" /></label>
@@ -77,6 +85,7 @@
     <div class="tabs" id="tabs" style="display:none">
       <button data-view="backup" class="active">Back up</button>
       <button data-view="restore">Restore</button>
+      <button data-view="history">History</button>
     </div>
 
     <!-- ===== BACKUP ===== -->
@@ -147,6 +156,23 @@
         </div>
         <pre class="plog" id="rLog" style="display:none"></pre>
       </div>
+    </section>
+
+    <!-- ===== HISTORY ===== -->
+    <section class="panel view" id="historyView" style="display:none">
+      <div class="row" style="justify-content:space-between; align-items:center">
+        <h2 style="margin:0">Backups</h2>
+        <button class="ghost" id="clearHistoryBtn">Clear history</button>
+      </div>
+      <table>
+        <thead><tr><th>When</th><th>Database</th><th>Telemetry</th><th class="size">Size</th><th>Status</th><th>Location</th></tr></thead>
+        <tbody id="bHist"></tbody>
+      </table>
+      <h2 style="margin:20px 0 10px">Restores</h2>
+      <table>
+        <thead><tr><th>When</th><th>Into database</th><th>Status</th><th>Archive</th></tr></thead>
+        <tbody id="rHist"></tbody>
+      </table>
     </section>
   </main>
   <script src="app.js"></script>
